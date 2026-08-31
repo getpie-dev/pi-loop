@@ -40,20 +40,15 @@ describe("format", () => {
     expect(formatDue(null, now)).toBe("done");
   });
 
-  it("renders widget rows and overflow", () => {
+  it("renders the widget as a single line", () => {
     const items = [
       item({ id: "a", running: true }),
       item({ id: "b", pending: true }),
       item({ id: "c" }),
-      item({ id: "d" }),
-      item({ id: "e" }),
     ];
     expect(formatWidgetLines([], now)).toEqual([]);
     expect(formatWidgetLines(items.slice(0, 1), now)).toEqual(["[loop] running · check deploy"]);
-    const lines = formatWidgetLines(items, now);
-    expect(lines).toHaveLength(4);
-    expect(lines[3]).toBe("… +2 more · /loops");
-    expect(lines.join("\n")).not.toContain("a  5m");
+    expect(formatWidgetLines(items, now)).toEqual(["[loop] running · check deploy · +2"]);
   });
 
   it("formats a full query list without ids", () => {

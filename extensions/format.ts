@@ -1,7 +1,6 @@
 import type { SchedulerListItem } from "./scheduler.js";
 
 export const WIDGET_ID = "pi-loop";
-export const WIDGET_MAX_ROWS = 4;
 
 export function isLoopListQuery(args: string): boolean {
   const first = args.trim().split(/\s+/)[0]?.toLowerCase();
@@ -35,13 +34,10 @@ export function formatLoopLine(item: SchedulerListItem, now: number): string {
 }
 
 export function formatWidgetLines(items: SchedulerListItem[], now: number): string[] {
-  if (items.length === 0) return [];
-  const visible = items.length > WIDGET_MAX_ROWS ? WIDGET_MAX_ROWS - 1 : items.length;
-  const lines = items.slice(0, visible).map((item) => formatLoopLine(item, now));
-  if (items.length > visible) {
-    lines.push(`… +${items.length - visible} more · /loops`);
-  }
-  return lines;
+  const first = items[0];
+  if (!first) return [];
+  const extra = items.length > 1 ? ` · +${items.length - 1}` : "";
+  return [`${formatLoopLine(first, now)}${extra}`];
 }
 
 export function formatLoopList(items: SchedulerListItem[], now: number): string {
