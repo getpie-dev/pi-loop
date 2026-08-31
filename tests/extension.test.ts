@@ -39,7 +39,7 @@ function fakePi() {
 describe("extension contract", () => {
   it("registers /loop, scheduler tools, and settled lifecycle", () => {
     const { commands, tools, events } = fakePi();
-    expect([...commands.keys()]).toEqual(["loop"]);
+    expect([...commands.keys()]).toEqual(["loop", "loops"]);
     expect([...tools.keys()]).toEqual(["scheduler_create", "scheduler_list", "scheduler_delete"]);
     expect(events.has("session_start")).toBe(true);
     expect(events.has("agent_start")).toBe(true);
@@ -48,6 +48,7 @@ describe("extension contract", () => {
     expect(events.has("agent_end")).toBe(false);
     expect(events.has("before_agent_start")).toBe(false);
     expect(commands.get("loop")!.description).toContain("Ask the model");
+    expect(commands.get("loops")!.description).toContain("List session loops");
     expect(tools.get("scheduler_create")!.description).toContain("one-off");
     expect(tools.get("scheduler_delete")!.description).toContain("stop condition");
   });
@@ -133,5 +134,57 @@ describe("extension contract", () => {
     await expect(
       tools.get("scheduler_create")!.execute(undefined as never, { id: created.id } as never),
     ).rejects.toThrow(/NOTHING_TO_UPDATE/);
+  });
+
+  it("lists loops from /loops and /loop list without starting a turn", async () => {
+    const { commands, events, sent, tools } = fakePi();
+    const notices: string[] = [];
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: false,
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      isProjectTrusted: () => false,
+      ui: { notify: (message: string) => notices.push(message) },
+    };
+    await events.get("session_start")!(undefined as never, ctx as never);
+    await commands.get("loops")!.handler("" as never, ctx as never);
+    expect(notices).toEqual(["No session loops. Use /loop [interval] [prompt] to create one."]);
+    expect(sent).toHaveLength(0);
+
+    await tools
+      .get("scheduler_create")!
+      .execute(undefined as never, { prompt: "check deploy", interval: "5m" } as never);
+    notices.length = 0;
+    await commands.get("loop")!.handler("list" as never, ctx as never);
+    expect(sent).toHaveLength(0);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("check deploy");
+    expect(notices[0]).toContain("5m");
+  });
+
+  it("updates the TUI widget when a loop is created", async () => {
+    const { events, tools } = fakePi();
+    const widgets: unknown[] = [];
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      isProjectTrusted: () => false,
+      ui: {
+        notify: () => undefined,
+        setWidget: (_id: string, lines: unknown) => {
+          widgets.push(lines);
+        },
+      },
+    };
+    await events.get("session_start")!(undefined as never, ctx as never);
+    await tools
+      .get("scheduler_create")!
+      .execute(undefined as never, { prompt: "check deploy", interval: "5m" } as never);
+    const last = widgets.at(-1);
+    expect(Array.isArray(last)).toBe(true);
+    expect(String((last as string[])[0])).toContain("check deploy");
   });
 });

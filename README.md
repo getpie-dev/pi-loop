@@ -30,9 +30,13 @@ pi install npm:@getpie/pi-loop
 /loop 5m check the deploy
 /loop check CI
 /loop
+/loops
+/loop list
 ```
 
 `/loop` asks the model to call `scheduler_create`. It does not create the loop itself.
+
+In TUI, active loops stay above the input. `/loops` or `/loop list` opens the full list.
 
 | Input | What the model should do |
 |---|---|

@@ -71,6 +71,7 @@ export interface SchedulerListItem {
 export interface SchedulerHost {
   clock: LoopClock;
   dispatch: LoopDispatch;
+  onChange?: () => void;
 }
 
 export class SessionLoopScheduler {
@@ -86,6 +87,7 @@ export class SessionLoopScheduler {
     this.tasks.clear();
     this.inFlight = null;
     this.disposed = false;
+    this.notify();
   }
 
   dispose(): void {
@@ -93,11 +95,13 @@ export class SessionLoopScheduler {
     this.tasks.clear();
     this.inFlight = null;
     this.disposed = true;
+    this.notify();
   }
 
   markStarted(): void {
     if (this.stale() || !this.inFlight) return;
     this.inFlight.started = true;
+    this.notify();
   }
 
   handleSettled(): void {
@@ -105,9 +109,11 @@ export class SessionLoopScheduler {
     const flight = this.inFlight;
     if (flight?.started) this.finishFlight(flight);
     else if (flight) this.releaseUnstarted(flight);
+    this.notify();
     setTimeout(() => {
       if (this.stale()) return;
       this.drain();
+      this.notify();
     }, 0);
   }
 
@@ -123,10 +129,12 @@ export class SessionLoopScheduler {
     }
     this.markDue(now);
     this.drain();
+    this.notify();
   }
 
   dispatchPending(): void {
     this.drain();
+    this.notify();
   }
 
   create(input: CreateInput): CreateResult {
@@ -148,6 +156,7 @@ export class SessionLoopScheduler {
       pendingSince: fireImmediately ? now : null,
     };
     this.add(task);
+    this.notify();
     return this.toCreateResult(task, { updated: false, raised: parsed.raised });
   }
 
@@ -166,6 +175,7 @@ export class SessionLoopScheduler {
       task.intervalMs = parsed.ms;
       raised = parsed.raised;
     }
+    this.notify();
     return this.toCreateResult(task, { updated: true, raised });
   }
 
@@ -185,6 +195,7 @@ export class SessionLoopScheduler {
     if (!task) return "not_found";
     const running = this.inFlight?.taskId === id;
     this.remove(task);
+    this.notify();
     return running ? "future_deleted_current_running" : "deleted_before_dispatch";
   }
 
@@ -255,6 +266,10 @@ export class SessionLoopScheduler {
     this.inFlight = null;
     if (!task) return;
     task.pendingSince = null;
+  }
+
+  private notify(): void {
+    this.host.onChange?.();
   }
 
   private add(task: LoopTask): void {

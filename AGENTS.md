@@ -9,10 +9,11 @@ Pi package that adds session-scoped `/loop` to [Pi](https://pi.dev). The command
 ### Structure
 
 ```
-extensions/index.ts       # Factory: /loop, scheduler_* tools, session lifecycle
+extensions/index.ts       # Factory: /loop, /loops, scheduler_* tools, session lifecycle
 extensions/scheduler.ts   # SessionLoopScheduler
 extensions/interval.ts    # Compact interval parse
 extensions/prompt.ts      # /loop instruction + scheduled fire content
+extensions/format.ts      # TUI widget and /loops list formatting
 extensions/types.ts       # customType constants
 tests/                    # Unit tests for the contract, interval, scheduler
 package.json              # Pi manifest, peer deps, npm publish config
@@ -29,6 +30,7 @@ package.json              # Pi manifest, peer deps, npm publish config
 ### Behaviour that must not regress
 
 - `/loop` sends a hidden `customType: "@getpie/pi-loop/schedule"` message with `triggerTurn: true`. It does not create the task.
+- `/loops` and `/loop list` query in-memory loops and do not start a turn. TUI shows active loops in a widget above the editor.
 - Fires use `customType: "@getpie/pi-loop"` with `triggerTurn: true`. Never `sendUserMessage`.
 - Tools: `scheduler_create` (create + in-place update), `scheduler_list`, `scheduler_delete`.
 - Intervals are compact (`5m` / `2h` / `60s`), not 5-field cron. No `schedule_wakeup`, no `run_at`.
