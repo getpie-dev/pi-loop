@@ -23,12 +23,15 @@ export function formatDue(nextFireAt: string | null, now: number): string {
 
 export function formatLoopState(item: SchedulerListItem, now: number): string {
   if (item.running) return "running";
-  if (item.pending) return "pending";
+  if (item.pending) return "waiting";
   return `next ${formatDue(item.next_fire_at, now)}`;
 }
 
 export function formatLoopLine(item: SchedulerListItem, now: number): string {
-  return `${item.id}  ${item.interval}  ${formatLoopState(item, now)}  ${item.prompt_preview}`;
+  const preview = item.prompt_preview.trim();
+  return preview
+    ? `[loop] ${formatLoopState(item, now)} · ${preview}`
+    : `[loop] ${formatLoopState(item, now)}`;
 }
 
 export function formatWidgetLines(items: SchedulerListItem[], now: number): string[] {

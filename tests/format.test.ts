@@ -49,16 +49,18 @@ describe("format", () => {
       item({ id: "e" }),
     ];
     expect(formatWidgetLines([], now)).toEqual([]);
-    expect(formatWidgetLines(items.slice(0, 1), now)).toEqual(["a  5m  running  check deploy"]);
+    expect(formatWidgetLines(items.slice(0, 1), now)).toEqual(["[loop] running · check deploy"]);
     const lines = formatWidgetLines(items, now);
     expect(lines).toHaveLength(4);
     expect(lines[3]).toBe("… +2 more · /loops");
+    expect(lines.join("\n")).not.toContain("a  5m");
   });
 
-  it("formats a full query list", () => {
+  it("formats a full query list without ids", () => {
     const items = [item({ id: "ab12", interval: "10m" })];
-    expect(formatLoopLine(items[0]!, now)).toBe("ab12  10m  next 4m  check deploy");
+    expect(formatLoopLine(items[0]!, now)).toBe("[loop] next 4m · check deploy");
     expect(formatLoopList([], now)).toBe("No session loops.");
-    expect(formatLoopList(items, now)).toContain("ab12");
+    expect(formatLoopList(items, now)).toBe("[loop] next 4m · check deploy");
+    expect(formatLoopList(items, now)).not.toContain("ab12");
   });
 });
