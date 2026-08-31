@@ -8,6 +8,7 @@ import {
   WIDGET_ID,
 } from "./format.js";
 import { LoopError } from "./interval.js";
+import { pickLoopToManage } from "./list-ui.js";
 import { loopScheduleInstruction, resolveMaintenancePrompt } from "./prompt.js";
 import { type SchedulerHost, SessionLoopScheduler, type UpdateInput } from "./scheduler.js";
 import { LOOP_CUSTOM_TYPE, LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE } from "./types.js";
@@ -88,20 +89,28 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
 
   async function showLoops(ctx: ExtensionContext): Promise<void> {
     ctxRef = ctx;
-    const items = scheduler.list();
-    const now = host.clock.now();
-    if (items.length === 0) {
-      ctx.ui.notify("No session loops. Use /loop [interval] [prompt] to create one.", "info");
-      return;
+    while (true) {
+      const items = scheduler.list();
+      const now = host.clock.now();
+      if (items.length === 0) {
+        ctx.ui.notify("No session loops. Use /loop [interval] [prompt] to create one.", "info");
+        return;
+      }
+      if (!ctx.hasUI) {
+        ctx.ui.notify(formatLoopList(items, now), "info");
+        return;
+      }
+      const result = await pickLoopToManage(
+        ctx,
+        items.map((item) => ({
+          value: item.id,
+          label: formatLoopLine(item, now),
+        })),
+      );
+      if (result?.action !== "stop") return;
+      scheduler.delete(result.id);
+      ctx.ui.notify("Stopped loop.", "info");
     }
-    if (!ctx.hasUI) {
-      ctx.ui.notify(formatLoopList(items, now), "info");
-      return;
-    }
-    await ctx.ui.select(
-      "Session loops",
-      items.map((item) => formatLoopLine(item, now)),
-    );
   }
 
   pi.on("session_start", (_event, ctx) => {
@@ -160,7 +169,7 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("loops", {
-    description: "List session loops. Does not create or start a turn.",
+    description: "List session loops. Press d to stop the highlighted loop. Does not start a turn.",
     handler: async (_args, ctx) => {
       await showLoops(ctx);
     },

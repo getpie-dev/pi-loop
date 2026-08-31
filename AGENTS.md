@@ -30,7 +30,7 @@ package.json              # Pi manifest, peer deps, npm publish config
 ### Behaviour that must not regress
 
 - `/loop` sends a hidden `customType: "@getpie/pi-loop/schedule"` message with `triggerTurn: true`. It does not create the task.
-- `/loops` and `/loop list` query in-memory loops and do not start a turn. TUI shows active loops in a widget above the editor.
+- `/loops` and `/loop list` query in-memory loops and do not start a turn. TUI shows active loops in a widget above the editor. In the list, `d` / `x` / Backspace / Delete stops the highlighted loop.
 - Fires use `customType: "@getpie/pi-loop"` with `triggerTurn: true`. Never `sendUserMessage`.
 - Tools: `scheduler_create` (create + in-place update), `scheduler_list`, `scheduler_delete`.
 - Intervals are compact (`5m` / `2h` / `60s`), not 5-field cron. No `schedule_wakeup`, no `run_at`.

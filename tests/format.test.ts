@@ -6,6 +6,7 @@ import {
   formatWidgetLines,
   isLoopListQuery,
 } from "../extensions/format.ts";
+import { isLoopStopKey } from "../extensions/list-ui.ts";
 import type { SchedulerListItem } from "../extensions/scheduler.ts";
 
 const now = Date.parse("2026-08-31T03:00:00.000Z");
@@ -25,6 +26,14 @@ function item(
 }
 
 describe("format", () => {
+  it("treats d, x, backspace, and delete as stop keys", () => {
+    expect(isLoopStopKey("d")).toBe(true);
+    expect(isLoopStopKey("x")).toBe(true);
+    expect(isLoopStopKey("\x7f")).toBe(true);
+    expect(isLoopStopKey("q")).toBe(false);
+    expect(isLoopStopKey("\r")).toBe(false);
+  });
+
   it("treats list and ls as query args and nothing else", () => {
     expect(isLoopListQuery("list")).toBe(true);
     expect(isLoopListQuery(" ls ")).toBe(true);

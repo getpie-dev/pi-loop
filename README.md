@@ -36,7 +36,7 @@ pi install npm:@getpie/pi-loop
 
 `/loop` asks the model to call `scheduler_create`. It does not create the loop itself.
 
-In TUI, active loops stay above the input as `[loop] next 12s · prompt`. `/loops` or `/loop list` opens the full list.
+In TUI, active loops stay above the input as `[loop] next 12s · prompt`. `/loops` or `/loop list` opens the full list; press `d` (or Backspace / Delete / `x`) to stop the highlighted loop.
 
 | Input | What the model should do |
 |---|---|

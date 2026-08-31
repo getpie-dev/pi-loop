@@ -163,6 +163,51 @@ describe("extension contract", () => {
     expect(notices[0]).toContain("5m");
   });
 
+  it("stops a loop returned by the TUI picker", async () => {
+    const { commands, events, tools } = fakePi();
+    let createdId = "";
+    let customCalls = 0;
+    const notices: string[] = [];
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      isProjectTrusted: () => false,
+      ui: {
+        notify: (message: string) => notices.push(message),
+        setWidget: () => undefined,
+        custom: async () => {
+          customCalls += 1;
+          if (customCalls === 1) return { action: "stop", id: createdId };
+          return { action: "close" };
+        },
+      },
+    };
+    await events.get("session_start")!(undefined as never, ctx as never);
+    const createdRaw = await tools
+      .get("scheduler_create")!
+      .execute(undefined as never, { prompt: "check deploy", interval: "5m" } as never);
+    createdId = JSON.parse(
+      (createdRaw as { content: Array<{ text: string }> }).content[0]!.text,
+    ).id;
+    await tools
+      .get("scheduler_create")!
+      .execute(undefined as never, { prompt: "watch CI", interval: "10m" } as never);
+
+    await commands.get("loops")!.handler("" as never, ctx as never);
+    const remaining = JSON.parse(
+      (
+        (await tools.get("scheduler_list")!.execute()) as {
+          content: Array<{ text: string }>;
+        }
+      ).content[0]!.text,
+    );
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].prompt_preview).toBe("watch CI");
+    expect(notices).toContain("Stopped loop.");
+  });
+
   it("updates the TUI widget when a loop is created", async () => {
     const { events, tools } = fakePi();
     const widgets: unknown[] = [];
