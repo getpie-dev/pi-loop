@@ -107,9 +107,22 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
           label: formatLoopLine(item, now),
         })),
       );
-      if (result?.action !== "stop") return;
-      scheduler.delete(result.id);
-      ctx.ui.notify("Stopped loop.", "info");
+      if (result?.action === "stop") {
+        scheduler.stop(result.id);
+        ctx.ui.notify("Stopped loop.", "info");
+        continue;
+      }
+      if (result?.action === "restart") {
+        scheduler.restart(result.id);
+        ctx.ui.notify("Restarted loop.", "info");
+        continue;
+      }
+      if (result?.action === "remove") {
+        scheduler.delete(result.id);
+        ctx.ui.notify("Removed loop.", "info");
+        continue;
+      }
+      return;
     }
   }
 
@@ -169,7 +182,7 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("loops", {
-    description: "List session loops. Press d to stop the highlighted loop. Does not start a turn.",
+    description: "List session loops. d stop, r restart, x remove. Does not start a turn.",
     handler: async (_args, ctx) => {
       await showLoops(ctx);
     },

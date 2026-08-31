@@ -22,6 +22,7 @@ export function formatDue(nextFireAt: string | null, now: number): string {
 
 export function formatLoopState(item: SchedulerListItem, now: number): string {
   if (item.running) return "running";
+  if (item.stopped) return "stopped";
   if (item.pending) return "waiting";
   return `next ${formatDue(item.next_fire_at, now)}`;
 }
@@ -34,7 +35,7 @@ export function formatLoopLine(item: SchedulerListItem, now: number): string {
 }
 
 export function formatWidgetLines(items: SchedulerListItem[], now: number): string[] {
-  const first = items[0];
+  const first = items.find((item) => !item.stopped) ?? items[0];
   if (!first) return [];
   const extra = items.length > 1 ? ` · +${items.length - 1}` : "";
   return [`${formatLoopLine(first, now)}${extra}`];

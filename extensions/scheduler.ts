@@ -30,6 +30,7 @@ export interface LoopTask {
   expiresAt: number;
   nextFireAt: number | null;
   pendingSince: number | null;
+  stopped: boolean;
 }
 
 export interface InFlight {
@@ -66,6 +67,7 @@ export interface SchedulerListItem {
   expires_at: string | null;
   pending: boolean;
   running: boolean;
+  stopped: boolean;
 }
 
 export interface SchedulerHost {
@@ -154,6 +156,7 @@ export class SessionLoopScheduler {
       expiresAt: now + TTL_MS,
       nextFireAt: now + parsed.ms,
       pendingSince: fireImmediately ? now : null,
+      stopped: false,
     };
     this.add(task);
     this.notify();
@@ -182,12 +185,36 @@ export class SessionLoopScheduler {
   list(): SchedulerListItem[] {
     return [...this.tasks.values()]
       .sort((a, b) => {
+        if (a.stopped !== b.stopped) return a.stopped ? 1 : -1;
         const an = a.nextFireAt ?? Number.POSITIVE_INFINITY;
         const bn = b.nextFireAt ?? Number.POSITIVE_INFINITY;
         if (an !== bn) return an - bn;
         return a.id.localeCompare(b.id);
       })
       .map((task) => this.toListItem(task));
+  }
+
+  stop(id: string): "stopped" | "stopped_current_running" | "not_found" {
+    const task = this.tasks.get(id);
+    if (!task) return "not_found";
+    task.stopped = true;
+    task.pendingSince = null;
+    this.notify();
+    return this.inFlight?.taskId === id ? "stopped_current_running" : "stopped";
+  }
+
+  restart(id: string): CreateResult {
+    this.assertActive();
+    const task = this.tasks.get(id);
+    if (!task) throw new LoopError("TASK_NOT_FOUND", `no scheduled loop with id ${id}`);
+    const now = this.host.clock.now();
+    task.stopped = false;
+    task.pendingSince = now;
+    const next = now + task.intervalMs;
+    task.nextFireAt = next > task.expiresAt ? null : next;
+    this.notify();
+    this.dispatchPending();
+    return this.toCreateResult(task, { updated: true, raised: false });
   }
 
   delete(id: string): "deleted_before_dispatch" | "future_deleted_current_running" | "not_found" {
@@ -201,7 +228,7 @@ export class SessionLoopScheduler {
 
   private markDue(now: number): void {
     const due = [...this.tasks.values()]
-      .filter((task) => task.nextFireAt != null && task.nextFireAt <= now)
+      .filter((task) => !task.stopped && task.nextFireAt != null && task.nextFireAt <= now)
       .sort(compareDue);
     for (const task of due) {
       const next = now + task.intervalMs;
@@ -217,7 +244,7 @@ export class SessionLoopScheduler {
   private drain(): void {
     if (this.inFlight) return;
     const pending = [...this.tasks.values()]
-      .filter((task) => task.pendingSince != null)
+      .filter((task) => !task.stopped && task.pendingSince != null)
       .sort((a, b) => {
         const dt = (a.pendingSince ?? 0) - (b.pendingSince ?? 0);
         return dt !== 0 ? dt : a.id.localeCompare(b.id);
@@ -227,6 +254,7 @@ export class SessionLoopScheduler {
   }
 
   private tryDispatch(task: LoopTask): boolean {
+    if (task.stopped) return false;
     if (this.stale() || this.inFlight) {
       task.pendingSince ??= this.host.clock.now();
       return false;
@@ -329,7 +357,7 @@ export class SessionLoopScheduler {
       interval: task.interval,
       next_fire_at: iso(task.nextFireAt),
       expires_at: iso(task.expiresAt),
-      pending: task.pendingSince != null && this.inFlight?.taskId !== task.id,
+      pending: !task.stopped && task.pendingSince != null && this.inFlight?.taskId !== task.id,
       updated: flags.updated,
       raised: flags.raised,
     };
@@ -342,8 +370,9 @@ export class SessionLoopScheduler {
       interval: task.interval,
       next_fire_at: iso(task.nextFireAt),
       expires_at: iso(task.expiresAt),
-      pending: task.pendingSince != null,
+      pending: !task.stopped && task.pendingSince != null,
       running: this.inFlight?.taskId === task.id,
+      stopped: task.stopped,
     };
   }
 }

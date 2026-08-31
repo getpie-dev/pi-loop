@@ -6,7 +6,7 @@ import {
   formatWidgetLines,
   isLoopListQuery,
 } from "../extensions/format.ts";
-import { isLoopStopKey } from "../extensions/list-ui.ts";
+import { isLoopRemoveKey, isLoopRestartKey, isLoopStopKey } from "../extensions/list-ui.ts";
 import type { SchedulerListItem } from "../extensions/scheduler.ts";
 
 const now = Date.parse("2026-08-31T03:00:00.000Z");
@@ -21,17 +21,20 @@ function item(
     expires_at: new Date(now + 7 * 24 * 60 * 60_000).toISOString(),
     pending: false,
     running: false,
+    stopped: false,
     ...partial,
   };
 }
 
 describe("format", () => {
-  it("treats d, x, backspace, and delete as stop keys", () => {
+  it("maps d to stop, r to restart, and x/backspace to remove", () => {
     expect(isLoopStopKey("d")).toBe(true);
-    expect(isLoopStopKey("x")).toBe(true);
-    expect(isLoopStopKey("\x7f")).toBe(true);
-    expect(isLoopStopKey("q")).toBe(false);
-    expect(isLoopStopKey("\r")).toBe(false);
+    expect(isLoopRestartKey("r")).toBe(true);
+    expect(isLoopRemoveKey("x")).toBe(true);
+    expect(isLoopRemoveKey("\x7f")).toBe(true);
+    expect(isLoopStopKey("x")).toBe(false);
+    expect(isLoopRestartKey("d")).toBe(false);
+    expect(isLoopRemoveKey("d")).toBe(false);
   });
 
   it("treats list and ls as query args and nothing else", () => {
@@ -58,6 +61,12 @@ describe("format", () => {
     expect(formatWidgetLines([], now)).toEqual([]);
     expect(formatWidgetLines(items.slice(0, 1), now)).toEqual(["[loop] running · check deploy"]);
     expect(formatWidgetLines(items, now)).toEqual(["[loop] running · check deploy · +2"]);
+    expect(formatWidgetLines([item({ id: "s", stopped: true }), ...items], now)).toEqual([
+      "[loop] running · check deploy · +3",
+    ]);
+    expect(formatLoopLine(item({ id: "s", stopped: true }), now)).toBe(
+      "[loop] stopped · check deploy",
+    );
   });
 
   it("formats a full query list without ids", () => {

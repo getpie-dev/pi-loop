@@ -203,9 +203,45 @@ describe("extension contract", () => {
         }
       ).content[0]!.text,
     );
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0].prompt_preview).toBe("watch CI");
+    expect(remaining).toHaveLength(2);
+    expect(remaining.find((item: { id: string }) => item.id === createdId)?.stopped).toBe(true);
     expect(notices).toContain("Stopped loop.");
+  });
+
+  it("restarts and removes loops from the TUI picker", async () => {
+    const { commands, events, tools } = fakePi();
+    let createdId = "";
+    const actions = [
+      () => ({ action: "restart" as const, id: createdId }),
+      () => ({ action: "remove" as const, id: createdId }),
+    ];
+    const notices: string[] = [];
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      isProjectTrusted: () => false,
+      ui: {
+        notify: (message: string) => notices.push(message),
+        setWidget: () => undefined,
+        custom: async () => actions.shift()?.() ?? { action: "close" },
+      },
+    };
+    await events.get("session_start")!(undefined as never, ctx as never);
+    const createdRaw = await tools
+      .get("scheduler_create")!
+      .execute(undefined as never, { prompt: "check deploy", interval: "5m" } as never);
+    createdId = JSON.parse(
+      (createdRaw as { content: Array<{ text: string }> }).content[0]!.text,
+    ).id;
+
+    await commands.get("loops")!.handler("" as never, ctx as never);
+    expect(notices).toContain("Restarted loop.");
+    expect(notices).toContain("Removed loop.");
+    expect(await tools.get("scheduler_list")!.execute()).toMatchObject({
+      content: [{ type: "text", text: "[]" }],
+    });
   });
 
   it("updates the TUI widget when a loop is created", async () => {

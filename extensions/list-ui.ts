@@ -9,15 +9,22 @@ import {
   Text,
 } from "@earendil-works/pi-tui";
 
-export type LoopPickResult = { action: "stop"; id: string } | { action: "close" };
+export type LoopPickResult =
+  | { action: "stop"; id: string }
+  | { action: "restart"; id: string }
+  | { action: "remove"; id: string }
+  | { action: "close" };
 
 export function isLoopStopKey(data: string): boolean {
-  return (
-    matchesKey(data, "d") ||
-    matchesKey(data, "x") ||
-    matchesKey(data, Key.backspace) ||
-    matchesKey(data, Key.delete)
-  );
+  return matchesKey(data, "d");
+}
+
+export function isLoopRestartKey(data: string): boolean {
+  return matchesKey(data, "r");
+}
+
+export function isLoopRemoveKey(data: string): boolean {
+  return matchesKey(data, "x") || matchesKey(data, Key.backspace) || matchesKey(data, Key.delete);
 }
 
 export async function pickLoopToManage(
@@ -39,17 +46,28 @@ export async function pickLoopToManage(
     selectList.onSelect = () => done({ action: "close" });
     selectList.onCancel = () => done({ action: "close" });
     container.addChild(selectList);
-    container.addChild(new Text(theme.fg("dim", "↑↓ navigate • d stop • esc close"), 1, 0));
+    container.addChild(
+      new Text(theme.fg("dim", "↑↓ navigate • d stop • r restart • x remove • esc close"), 1, 0),
+    );
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+
+    const selectedId = (): string | null => selectList.getSelectedItem()?.value ?? null;
 
     return {
       render: (w) => container.render(w),
       invalidate: () => container.invalidate(),
       handleInput: (data) => {
+        const id = selectedId();
         if (isLoopStopKey(data)) {
-          const selected = selectList.getSelectedItem();
-          if (selected) done({ action: "stop", id: selected.value });
-          else done({ action: "close" });
+          done(id ? { action: "stop", id } : { action: "close" });
+          return;
+        }
+        if (isLoopRestartKey(data)) {
+          done(id ? { action: "restart", id } : { action: "close" });
+          return;
+        }
+        if (isLoopRemoveKey(data)) {
+          done(id ? { action: "remove", id } : { action: "close" });
           return;
         }
         selectList.handleInput(data);

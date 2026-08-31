@@ -194,6 +194,25 @@ describe("scheduler", () => {
     expect(() => scheduler.tick()).not.toThrow();
   });
 
+  it("stops firing until restart, then dispatches when idle", () => {
+    const { clock, dispatch, sent, scheduler } = setup();
+    const created = scheduler.create({ prompt: "check deploy", interval: "5m" });
+    expect(scheduler.stop(created.id)).toBe("stopped");
+    expect(scheduler.list()[0]?.stopped).toBe(true);
+
+    clock.nowMs = Date.parse(created.next_fire_at!);
+    scheduler.tick();
+    expect(sent).toHaveLength(0);
+
+    dispatch.idle = true;
+    const restarted = scheduler.restart(created.id);
+    expect(restarted.updated).toBe(true);
+    expect(restarted.pending).toBe(false);
+    expect(sent).toHaveLength(1);
+    expect(scheduler.list()[0]?.stopped).toBe(false);
+    expect(scheduler.stop("deadbeef")).toBe("not_found");
+  });
+
   it("rejects empty and oversized prompts with distinct codes", () => {
     const { scheduler } = setup();
     try {
