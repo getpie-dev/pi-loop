@@ -1,4 +1,4 @@
-# @oxwen11/pi-loop — Agent Context
+# @getpie/pi-loop — Agent Context
 
 ## Project Overview
 
@@ -28,8 +28,8 @@ package.json              # Pi manifest, peer deps, npm publish config
 
 ### Behaviour that must not regress
 
-- `/loop` sends a hidden `customType: "@oxwen11/pi-loop/schedule"` message with `triggerTurn: true`. It does not create the task.
-- Fires use `customType: "@oxwen11/pi-loop"` with `triggerTurn: true`. Never `sendUserMessage`.
+- `/loop` sends a hidden `customType: "@getpie/pi-loop/schedule"` message with `triggerTurn: true`. It does not create the task.
+- Fires use `customType: "@getpie/pi-loop"` with `triggerTurn: true`. Never `sendUserMessage`.
 - Tools: `scheduler_create` (create + in-place update), `scheduler_list`, `scheduler_delete`.
 - Intervals are compact (`5m` / `2h` / `60s`), not 5-field cron. No `schedule_wakeup`, no `run_at`.
 - Drain only when idle and no pending messages. Coalesce missed fires. `agent_settled` is the completion boundary.

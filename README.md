@@ -1,8 +1,8 @@
-# @oxwen11/pi-loop
+# @getpie/pi-loop
 
 Session-scoped `/loop` for [Pi](https://pi.dev). Compact-interval scheduler in the current session: `scheduler_create`, `scheduler_list`, `scheduler_delete`.
 
-Fires with `sendMessage({ customType: "@oxwen11/pi-loop" }, { triggerTurn: true })` so the fire is a custom message, not a user bubble. In-memory only: tasks disappear on process exit, `/reload`, `/new`, `/resume`, and `/fork`.
+Fires with `sendMessage({ customType: "@getpie/pi-loop" }, { triggerTurn: true })` so the fire is a custom message, not a user bubble. In-memory only: tasks disappear on process exit, `/reload`, `/new`, `/resume`, and `/fork`.
 
 ## Install
 
@@ -21,7 +21,7 @@ pi -ne -e /Users/dinq/Code/oxwen11/pi-loop --no-session
 After publishing:
 
 ```bash
-pi install npm:@oxwen11/pi-loop
+pi install npm:@getpie/pi-loop
 ```
 
 ## Use

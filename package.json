@@ -1,5 +1,5 @@
 {
-  "name": "@oxwen11/pi-loop",
+  "name": "@getpie/pi-loop",
   "version": "0.1.0",
   "description": "Session-scoped /loop for Pi: compact-interval scheduler_create / scheduler_list / scheduler_delete",
   "type": "module",
