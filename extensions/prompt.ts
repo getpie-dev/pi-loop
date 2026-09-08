@@ -23,33 +23,32 @@ export interface LoopMessageDetails {
 export function loopScheduleInstruction(args: string, maintenancePrompt: string): string {
   const input = args.trim() || "(none — use the default maintenance prompt)";
   return [
-    "# /loop — schedule a recurring prompt",
+    "# /loop -- schedule a recurring prompt",
     "",
-    "Turn the input below into a scheduler_create call. Each fire arrives as a new turn in this conversation. The stored prompt is re-sent verbatim every time, so write a standing order, not a one-off request.",
+    "Turn the input below into a scheduler_create call. Each fire arrives as a new turn in this conversation, and earlier results from the same task may still be above it. The stored prompt is re-sent verbatim every time, so write a standing order rather than a one-off request.",
     "",
-    "## Writing the stored prompt",
-    '- Name paths, job/PR/branch ids, the check to run, and what "done" looks like.',
-    "- Say what one fire does and when it bails. A fire must not poll inline.",
-    "- Give a stop condition: when it holds, report it and call scheduler_delete with the id.",
+    "## Writing a prompt that reads well on every fire",
+    '- Name the state that must not be guessed: paths, job/PR/branch ids, the command that checks status, and what "healthy" looks like. This conversation is compacted as it grows, so do not rely on details staying visible.',
+    "- Earlier fires may be above you: continue from them instead of restarting.",
+    '- Say what one fire does and when it bails: "if still pending, report one line and stop." A fire must not poll inline.',
+    '- Give it a stop condition and an exit: "when <condition> holds, report it and call scheduler_delete <id>." Without that the loop runs until it expires.',
+    "- Keep it short and concrete -- the stored prompt is re-sent on every fire.",
     "- If the user did not give a prompt, use the default maintenance prompt below.",
     "",
-    "## Interval",
-    "- Convert the user cadence — however phrased — into compact `<number><unit>` (`s`/`m`/`h`/`d`). Minimum 60 seconds; say so if you raise it.",
-    `- If no cadence is given, choose one that fits the task. Default to ${DEFAULT_INTERVAL}. Tell the user what you picked. Do not ask. Do not self-pace or change the interval every fire.`,
+    "## Deriving the interval",
+    "Convert the user's cadence -- however phrased, at either end of the request -- into a compact `<number><unit>` string (`s`/`m`/`h`/`d`); the remaining text is the prompt.",
+    "The minimum is 60 seconds and shorter values are raised, so say so when it applies.",
+    `If no cadence is given, choose one that fits the task. Default to ${DEFAULT_INTERVAL}. Tell the user what you picked. Do not ask. Do not self-pace or change the interval every fire.`,
     "",
     "## Action",
-    "Do not explore the workspace or run the prompt before scheduling; the first fire does that.",
-    "1. Call scheduler_create with interval, prompt, and fire_immediately: true.",
-    "2. Confirm the cadence, stop condition, 7-day expiry, and the id for scheduler_delete.",
-    "3. Do NOT execute the prompt inline.",
+    "Schedule from what the user already gave you — do not explore the workspace or run checks before scheduling; the first fire does that.",
+    "1. Call scheduler_create with the interval, the prompt, and fire_immediately: true.",
+    "   If the interval is rejected, fix the string rather than guessing.",
+    "2. Confirm what's scheduled, the cadence, its stop condition, that it auto-expires after 7 days, and the id to cancel with scheduler_delete.",
+    "3. Do NOT execute the prompt inline. The scheduler fires it immediately.",
     "",
-    "## Wrong tool",
-    "- Clock-time or weekday jobs → an external scheduler (cron, systemd, GitHub Actions), not this tool.",
-    '- "Tell me when X finishes" → wait on the event, not a timer loop.',
-    '- "Do X once in N minutes" → not a recurring loop.',
-    "",
-    "## Changing a loop",
-    "Call scheduler_create with its id and only the changed fields. Do not delete and recreate.",
+    "## Changing an existing loop",
+    "Call scheduler_create with its id and only the changed fields; do not delete and recreate.",
     "",
     "## Default maintenance prompt",
     maintenancePrompt,
@@ -59,13 +58,12 @@ export function loopScheduleInstruction(args: string, maintenancePrompt: string)
   ].join("\n");
 }
 
-export function buildScheduledContent(prompt: string, id: string): string {
+export function buildScheduledContent(prompt: string, id: string, interval: string): string {
   return [
-    `Scheduled loop iteration (id: ${id}). Run only this standing order, then stop.`,
+    `Scheduled task ${id} (every ${interval}, recurring).`,
+    "Execute the prompt below. Previous results from earlier executions of this task may appear above.",
     "",
     prompt,
-    "",
-    "If earlier fires of this loop are above, continue from them. Do not poll inline. When the work is done, call scheduler_delete with this id.",
   ].join("\n");
 }
 

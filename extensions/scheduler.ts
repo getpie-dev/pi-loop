@@ -267,7 +267,7 @@ export class SessionLoopScheduler {
     this.inFlight = { taskId: task.id, started: false, dispatchedAt: now };
     task.pendingSince = null;
     this.host.dispatch.sendScheduled({
-      content: buildScheduledContent(task.prompt, task.id),
+      content: buildScheduledContent(task.prompt, task.id, task.interval),
       details: { taskId: task.id, prompt: task.prompt },
     });
     return true;

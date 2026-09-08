@@ -71,7 +71,8 @@ describe("scheduler", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.content).not.toMatch(/^\//);
     expect(sent[0]!.content).toContain(created.id);
-    expect(sent[0]!.content).toContain("scheduler_delete");
+    expect(sent[0]!.content).toContain("check deploy");
+    expect(sent[0]!.content).toContain("every 5m");
     expect(sent[0]!.content).not.toContain("schedule_wakeup");
     expect(sent[0]!.details.prompt).toBe("check deploy");
     fire(scheduler);

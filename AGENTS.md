@@ -33,6 +33,7 @@ package.json              # Pi manifest, peer deps, npm publish config
 - `/loops` and `/loop list` query in-memory loops and do not start a turn. TUI shows active loops in a widget above the editor. In the list: `d` stop (pause), `r` restart, `x` / Backspace / Delete remove.
 - Fires use `customType: "@getpie/pi-loop"` with `triggerTurn: true`. Never `sendUserMessage`.
 - Tools: `scheduler_create` (create + in-place update), `scheduler_list`, `scheduler_delete`.
+- `scheduler_create` is a single object schema (all fields optional). Do not use `Type.Union` / `anyOf`: Anthropic `convertTools` only copies top-level `properties`, so a Union arrives as an empty `input_schema`. Create vs update is decided at runtime (`id` present → update; otherwise `prompt` and `interval` are required).
 - Intervals are compact (`5m` / `2h` / `60s`), not 5-field cron. No `schedule_wakeup`, no `run_at`.
 - Drain only when idle and no pending messages. Coalesce missed fires. `agent_settled` is the completion boundary.
 

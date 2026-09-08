@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import piLoopExtension from "../extensions/index.ts";
+import type { CreateResult } from "../extensions/scheduler.ts";
 import { LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE } from "../extensions/types.ts";
 
 type Handler = (...args: never[]) => unknown;
@@ -49,25 +50,26 @@ describe("extension contract", () => {
     expect(events.has("before_agent_start")).toBe(false);
     expect(commands.get("loop")!.description).toContain("Ask the model");
     expect(commands.get("loops")!.description).toContain("List session loops");
-    expect(tools.get("scheduler_create")!.description).toContain("one-off");
-    expect(tools.get("scheduler_delete")!.description).toContain("stop condition");
+    expect(tools.get("scheduler_create")!.description).toContain("recurring interval");
+    expect(tools.get("scheduler_create")!.description).not.toContain("clock-time");
+    expect(tools.get("scheduler_delete")!.description).toContain("Cancel a scheduled task");
   });
 
-  it("uses snake_case create/update variants and rejects extra properties", () => {
+  it("uses a single object schema Anthropic can flatten to input_schema.properties", () => {
     const { tools } = fakePi();
     const schema = tools.get("scheduler_create")!.parameters as {
-      anyOf?: Array<{ additionalProperties?: boolean; properties?: Record<string, unknown> }>;
+      anyOf?: unknown;
+      additionalProperties?: boolean;
+      properties?: Record<string, unknown>;
     };
-    expect(schema.anyOf).toHaveLength(2);
-    const [createSchema, updateSchema] = schema.anyOf ?? [];
-    expect(createSchema?.additionalProperties).toBe(false);
-    expect(createSchema?.properties).toHaveProperty("interval");
-    expect(createSchema?.properties).toHaveProperty("fire_immediately");
-    expect(createSchema?.properties).not.toHaveProperty("id");
-    expect(updateSchema?.properties).toHaveProperty("id");
-    expect(updateSchema?.properties).not.toHaveProperty("fire_immediately");
-    expect(createSchema?.properties).not.toHaveProperty("cron");
-    expect(createSchema?.properties).not.toHaveProperty("run_at");
+    expect(schema.anyOf).toBeUndefined();
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties).toHaveProperty("interval");
+    expect(schema.properties).toHaveProperty("prompt");
+    expect(schema.properties).toHaveProperty("fire_immediately");
+    expect(schema.properties).toHaveProperty("id");
+    expect(schema.properties).not.toHaveProperty("cron");
+    expect(schema.properties).not.toHaveProperty("run_at");
   });
 
   it("injects a schedule instruction and lets the model create the loop", async () => {
@@ -96,6 +98,8 @@ describe("extension contract", () => {
     expect(instruction).toContain("check CI");
     expect(instruction).toContain("Default to 5m");
     expect(instruction).not.toContain("schedule_wakeup");
+    expect(instruction).not.toContain("Clock-time");
+    expect(instruction).not.toContain("weekday");
     expect(await tools.get("scheduler_list")!.execute()).toMatchObject({
       content: [{ type: "text", text: "[]" }],
     });
@@ -111,29 +115,73 @@ describe("extension contract", () => {
       ui: { notify: () => undefined },
     };
     await events.get("session_start")!(undefined as never, ctx as never);
-    const createdRaw = await tools
+    const createdRaw = (await tools
       .get("scheduler_create")!
-      .execute(undefined as never, { prompt: "check deploy", interval: "30s" } as never);
-    const created = JSON.parse(
-      (createdRaw as { content: Array<{ text: string }> }).content[0]!.text,
-    );
+      .execute(undefined as never, { prompt: "check deploy", interval: "30s" } as never)) as {
+      content: Array<{ text: string }>;
+      details: CreateResult;
+    };
+    const created = createdRaw.details;
     expect(created.interval).toBe("60s");
     expect(created.raised).toBe(true);
     expect(created.updated).toBe(false);
-
-    const updatedRaw = await tools
-      .get("scheduler_create")!
-      .execute(undefined as never, { id: created.id, interval: "10m" } as never);
-    const updated = JSON.parse(
-      (updatedRaw as { content: Array<{ text: string }> }).content[0]!.text,
+    expect(createdRaw.content[0]!.text).toBe(
+      `Loop ${created.id} created, every 60s, next fire at ${created.next_fire_at}. Interval was raised to the 60s minimum.`,
     );
+
+    const immediateRaw = (await tools
+      .get("scheduler_create")!
+      .execute(
+        undefined as never,
+        { prompt: "check deploy", interval: "5m", fire_immediately: true } as never,
+      )) as { content: Array<{ text: string }>; details: CreateResult };
+    expect(immediateRaw.details.pending).toBe(true);
+    expect(immediateRaw.content[0]!.text).toContain("First fire runs immediately.");
+    expect(immediateRaw.content[0]!.text).not.toContain("60s minimum");
+
+    const updatedRaw = (await tools
+      .get("scheduler_create")!
+      .execute(undefined as never, { id: created.id, interval: "10m" } as never)) as {
+      content: Array<{ text: string }>;
+      details: CreateResult;
+    };
+    const updated = updatedRaw.details;
     expect(updated.id).toBe(created.id);
     expect(updated.interval).toBe("10m");
     expect(updated.updated).toBe(true);
+    expect(updatedRaw.content[0]!.text).toBe(
+      `Loop ${created.id} updated, every 10m, next fire at ${updated.next_fire_at}.`,
+    );
+
+    const queuedUpdateRaw = (await tools
+      .get("scheduler_create")!
+      .execute(undefined as never, { id: immediateRaw.details.id, interval: "15m" } as never)) as {
+      content: Array<{ text: string }>;
+      details: CreateResult;
+    };
+    expect(queuedUpdateRaw.details.pending).toBe(true);
+    expect(queuedUpdateRaw.details.updated).toBe(true);
+    expect(queuedUpdateRaw.content[0]!.text).not.toContain("First fire runs immediately.");
 
     await expect(
       tools.get("scheduler_create")!.execute(undefined as never, { id: created.id } as never),
     ).rejects.toThrow(/NOTHING_TO_UPDATE/);
+
+    const emptyIdRaw = (await tools.get("scheduler_create")!.execute(
+      undefined as never,
+      {
+        id: "",
+        prompt: "check empty id",
+        interval: "5m",
+      } as never,
+    )) as { content: Array<{ text: string }>; details: CreateResult };
+    expect(emptyIdRaw.details.updated).toBe(false);
+    expect(emptyIdRaw.content[0]!.text).toContain("Loop ");
+    expect(emptyIdRaw.content[0]!.text).toContain("created, every 5m");
+
+    await expect(
+      tools.get("scheduler_create")!.execute(undefined as never, { interval: "5m" } as never),
+    ).rejects.toThrow(/prompt is required when creating a task/);
   });
 
   it("lists loops from /loops and /loop list without starting a turn", async () => {
@@ -185,12 +233,12 @@ describe("extension contract", () => {
       },
     };
     await events.get("session_start")!(undefined as never, ctx as never);
-    const createdRaw = await tools
+    const createdRaw = (await tools
       .get("scheduler_create")!
-      .execute(undefined as never, { prompt: "check deploy", interval: "5m" } as never);
-    createdId = JSON.parse(
-      (createdRaw as { content: Array<{ text: string }> }).content[0]!.text,
-    ).id;
+      .execute(undefined as never, { prompt: "check deploy", interval: "5m" } as never)) as {
+      details: CreateResult;
+    };
+    createdId = createdRaw.details.id;
     await tools
       .get("scheduler_create")!
       .execute(undefined as never, { prompt: "watch CI", interval: "10m" } as never);
@@ -229,12 +277,12 @@ describe("extension contract", () => {
       },
     };
     await events.get("session_start")!(undefined as never, ctx as never);
-    const createdRaw = await tools
+    const createdRaw = (await tools
       .get("scheduler_create")!
-      .execute(undefined as never, { prompt: "check deploy", interval: "5m" } as never);
-    createdId = JSON.parse(
-      (createdRaw as { content: Array<{ text: string }> }).content[0]!.text,
-    ).id;
+      .execute(undefined as never, { prompt: "check deploy", interval: "5m" } as never)) as {
+      details: CreateResult;
+    };
+    createdId = createdRaw.details.id;
 
     await commands.get("loops")!.handler("" as never, ctx as never);
     expect(notices).toContain("Restarted loop.");

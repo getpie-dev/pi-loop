@@ -44,8 +44,6 @@ In TUI, active loops stay above the input as `[loop] next 12s · prompt`. `/loop
 | `/loop check CI` | pick an interval, default `5m`, tell you, do not ask |
 | `/loop` / `/loop 15m` | no prompt → `.pi/loop.md`, `~/.pi/agent/loop.md`, or the built-in maintenance prompt |
 
-Clock-time, weekday, and one-shot delays are not this tool. Use cron / systemd / GitHub Actions.
-
 ## Limits
 
 - Interval: `Ns` / `Nm` / `Nh` / `Nd`. Below 60 seconds is raised to `60s`. Above 7 days is rejected.

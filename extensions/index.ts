@@ -10,35 +10,43 @@ import {
 import { LoopError } from "./interval.js";
 import { pickLoopToManage } from "./list-ui.js";
 import { loopScheduleInstruction, resolveMaintenancePrompt } from "./prompt.js";
-import { type SchedulerHost, SessionLoopScheduler, type UpdateInput } from "./scheduler.js";
+import {
+  type CreateResult,
+  type SchedulerHost,
+  SessionLoopScheduler,
+  type UpdateInput,
+} from "./scheduler.js";
 import { LOOP_CUSTOM_TYPE, LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE } from "./types.js";
 
-const SchedulerCreateNewParams = Type.Object(
+// Single object, not anyOf: Anthropic convertTools only copies top-level properties,
+// so a Union schema arrives as an empty input_schema.
+const SchedulerCreateParams = Type.Object(
   {
-    prompt: Type.String({ description: "Prompt to run on each fire" }),
-    interval: Type.String({ description: "Interval such as 5m, 2h, or 60s" }),
-    fire_immediately: Type.Optional(
-      Type.Boolean({ description: "Fire once on create in addition to the interval" }),
+    prompt: Type.Optional(
+      Type.String({
+        description: "Prompt to run on each fire. Required to create; optional with id",
+      }),
     ),
-  },
-  { additionalProperties: false },
-);
-
-const SchedulerUpdateParams = Type.Object(
-  {
-    id: Type.String({
-      description:
-        "Existing scheduler id. Omitted fields stay unchanged and the next fire keeps its phase",
-    }),
-    prompt: Type.Optional(Type.String({ description: "Replacement standing-order prompt" })),
     interval: Type.Optional(
-      Type.String({ description: "Replacement interval such as 5m, 2h, or 60s" }),
+      Type.String({
+        description: "Interval such as 5m, 2h, or 60s. Required to create; optional with id",
+      }),
+    ),
+    fire_immediately: Type.Optional(
+      Type.Boolean({
+        description:
+          "Fire once on create in addition to the interval. Ignored when updating with id",
+      }),
+    ),
+    id: Type.Optional(
+      Type.String({
+        description:
+          "Existing scheduler id to update in place. Omitted fields stay unchanged and the next fire keeps its phase",
+      }),
     ),
   },
   { additionalProperties: false },
 );
-
-const SchedulerCreateParams = Type.Union([SchedulerCreateNewParams, SchedulerUpdateParams]);
 
 const SchedulerDeleteParams = Type.Object(
   { id: Type.String({ description: "Id from scheduler_list or scheduler_create" }) },
@@ -192,18 +200,19 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
     name: "scheduler_create",
     label: "Scheduler create",
     description:
-      'Create a recurring interval prompt in the current Session, or update an existing one in place. Interval: 5m, 2h, 1d, 60s (minimum 60 seconds). fire_immediately also fires once on create; default waits for the first interval. To change a loop, pass id; provided fields replace old values, omitted ones stay unchanged, and the next fire keeps its phase. Do not use this for one-off delays or "tell me when X finishes". Do not use this for clock-time or weekday schedules — those belong to an external scheduler (cron, systemd, GitHub Actions). Max 50. Expires after 7 days.',
+      'Create a scheduled task that runs a prompt on a recurring interval, or update an existing one in place.\n\nUse this tool when a user asks you to loop, repeat, or schedule a prompt or a task.\n\nSet fire_immediately: true to also fire once on creation; by default the first run waits for the interval.\n\nTo change an existing task, pass its id: provided fields replace old values, omitted ones are unchanged, and the schedule keeps its phase. An unknown id errors.\n\nUsage notes:\n- Interval format: "5m" (minutes), "2h" (hours), "1d" (days), "60s" (seconds, min 60)\n- Maximum 50 scheduled tasks at once\n- Tasks auto-expire after 7 days',
     parameters: SchedulerCreateParams,
     async execute(_id, params) {
-      const result =
-        "id" in params
-          ? scheduler.update(toUpdateInput(params))
-          : scheduler.create({
-              prompt: params.prompt,
-              interval: params.interval,
-              fireImmediately: params.fire_immediately === true,
-            });
-      return textResult(JSON.stringify(result));
+      const result = hasSchedulerId(params.id)
+        ? scheduler.update(
+            toUpdateInput({ id: params.id, prompt: params.prompt, interval: params.interval }),
+          )
+        : scheduler.create({
+            prompt: requireCreateField(params.prompt, "prompt"),
+            interval: requireCreateField(params.interval, "interval"),
+            fireImmediately: params.fire_immediately === true,
+          });
+      return textResult(describeCreateResult(result), result);
     },
   });
 
@@ -211,7 +220,7 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
     name: "scheduler_list",
     label: "Scheduler list",
     description:
-      "List active scheduled loops in the current Session only. Use before updating or deleting.",
+      "List all active scheduled tasks with their IDs, prompts, intervals, and next fire times.",
     parameters: SchedulerListParams,
     async execute() {
       return textResult(JSON.stringify(scheduler.list()));
@@ -222,7 +231,7 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
     name: "scheduler_delete",
     label: "Scheduler delete",
     description:
-      "Stop a session loop by id from scheduler_list or scheduler_create. Removes future and locally pending fires. Does not abort work already sent to the model. Call this when the loop's stop condition holds or the user asks to cancel.",
+      "Cancel a scheduled task by ID from scheduler_list or scheduler_create. Removes future and locally pending fires. Does not abort work already sent to the model.",
     parameters: SchedulerDeleteParams,
     async execute(_id, params) {
       const outcome = scheduler.delete(params.id);
@@ -239,6 +248,17 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
   });
 }
 
+function hasSchedulerId(id: string | undefined): id is string {
+  return typeof id === "string" && id.length > 0;
+}
+
+function requireCreateField(value: string | undefined, name: "prompt" | "interval"): string {
+  if (value == null || value.trim() === "") {
+    throw new LoopError("INVALID_ARGUMENTS", `${name} is required when creating a task`);
+  }
+  return value;
+}
+
 function toUpdateInput(params: { id: string; prompt?: string; interval?: string }): UpdateInput {
   if (params.prompt != null && params.interval != null) {
     return { id: params.id, prompt: params.prompt, interval: params.interval };
@@ -248,8 +268,23 @@ function toUpdateInput(params: { id: string; prompt?: string; interval?: string 
   throw new LoopError("NOTHING_TO_UPDATE", "nothing to update: provide interval and/or prompt");
 }
 
-function textResult(text: string) {
-  return { content: [{ type: "text" as const, text }], details: {} };
+function textResult(text: string, details: CreateResult | Record<string, never> = {}) {
+  return { content: [{ type: "text" as const, text }], details };
+}
+
+// Models handle a one-line confirmation with the id embedded better than raw JSON.
+function describeCreateResult(result: CreateResult): string {
+  const head = result.updated
+    ? `Loop ${result.id} updated, every ${result.interval}`
+    : `Loop ${result.id} created, every ${result.interval}`;
+  const parts = [
+    result.next_fire_at
+      ? `${head}, next fire at ${result.next_fire_at}.`
+      : `${head}, no future fire (expired).`,
+  ];
+  if (result.raised) parts.push("Interval was raised to the 60s minimum.");
+  if (!result.updated && result.pending) parts.push("First fire runs immediately.");
+  return parts.join(" ");
 }
 
 export { LoopError } from "./interval.js";
