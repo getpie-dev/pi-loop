@@ -6,6 +6,12 @@ Fires with `sendMessage({ customType: "@getpie/pi-loop" }, { triggerTurn: true }
 
 ## Install
 
+```bash
+pi install git:github.com/getpie-dev/pi-loop
+```
+
+Update later with `pi update git:github.com/getpie-dev/pi-loop`.
+
 Local checkout:
 
 ```bash
@@ -16,12 +22,6 @@ Or load once without installing:
 
 ```bash
 pi -ne -e /Users/dinq/Code/oxwen11/pi-loop --no-session
-```
-
-After publishing:
-
-```bash
-pi install npm:@getpie/pi-loop
 ```
 
 ## Use
