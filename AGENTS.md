@@ -11,17 +11,17 @@ Pi package that adds session-scoped `/loop` to [Pi](https://pi.dev). The command
 ```
 extensions/index.ts       # TypeBox schemas, registrations, and explicit Pi operation adapters
 extensions/integration.ts # Pi lifecycle/records, commands/tools, prompt trust, picker, widget
-extensions/manager.ts     # Host-independent LoopManager: orchestration and checkpoint/dedup policy
-extensions/scheduler.ts   # Sole scheduling authority: tasks, dispatch state, and timers
+extensions/scheduler.ts   # Host-independent Scheduler: orchestration and checkpoint/dedup policy
+extensions/session-scheduler.ts # SessionLoopScheduler: authoritative tasks, dispatch state, timers
 extensions/interval.ts    # Compact interval parse
 extensions/prompt.ts      # /loop instruction + scheduled fire content
 extensions/format.ts      # TUI widget and /loops list formatting
 extensions/types.ts       # customType constants
-tests/                    # Domain manager, Pi integration/wiring, scheduler, persistence, formatting
+tests/                    # Scheduler capability, Pi integration/wiring, session scheduler, persistence, formatting
 package.json              # Pi manifest, peer deps, npm publish config
 ```
 
-The host-independent `LoopManager` accepts only domain clock/dispatch, definition-storage, and change/warning capabilities. It owns checkpoint deduplication around exactly one private scheduler; restoration accepts definitions and a checkpoint-required flag, never a Pi context or lifecycle reason. `LoopIntegration` localizes the Pi context/render cache, session record selection/envelopes, and all command/tool/UI translation. Management mutations return `{ value, warning? }`: checkpoint feedback belongs to the completed operation, not ambient warning state. The mutation hook checkpoints before change notification and explicit restart dispatch. Disposal clears runtime resources without appending a snapshot.
+The host-independent `Scheduler` accepts only domain clock/dispatch, definition-storage, and change/warning capabilities. It owns checkpoint deduplication around exactly one private `SessionLoopScheduler`; restoration accepts definitions and a checkpoint-required flag, never a Pi context or lifecycle reason. `LoopIntegration` localizes the Pi context/render cache, session record selection/envelopes, and all command/tool/UI translation. Management mutations return `{ value, warning? }`: checkpoint feedback belongs to the completed operation, not ambient warning state. The mutation hook checkpoints before change notification and explicit restart dispatch. Disposal clears runtime resources without appending a snapshot.
 
 ### Key constraints
 

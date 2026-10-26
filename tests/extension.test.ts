@@ -1,7 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import piLoopExtension from "../extensions/index.ts";
+import piLoopExtension, { SessionLoopScheduler } from "../extensions/index.ts";
 import { LoopIntegration } from "../extensions/integration.ts";
+import { SessionLoopScheduler as SharedSessionLoopScheduler } from "../extensions/scheduler.ts";
+import { SessionLoopScheduler as SessionSchedulerImplementation } from "../extensions/session-scheduler.ts";
 import { LOOP_CUSTOM_TYPE, LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE } from "../extensions/types.ts";
 
 const host = vi.hoisted(() => ({ VERSION: "1.4.0" }));
@@ -108,6 +110,8 @@ describe("minimum host version", () => {
 
 describe("extension contract", () => {
   it("registers /loop, scheduler tools, and settled lifecycle", () => {
+    expect(SessionLoopScheduler).toBe(SessionSchedulerImplementation);
+    expect(SharedSessionLoopScheduler).toBe(SessionSchedulerImplementation);
     const { commands, tools, events } = fakePi();
     expect([...commands.keys()]).toEqual(["loop", "loops"]);
     expect([...tools.keys()]).toEqual(["scheduler_create", "scheduler_list", "scheduler_delete"]);

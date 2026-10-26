@@ -118,7 +118,7 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
 }
 
 export { LoopError } from "./interval.js";
-export { SessionLoopScheduler } from "./scheduler.js";
+export { SessionLoopScheduler } from "./session-scheduler.js";
 export {
   LOOP_CUSTOM_TYPE,
   LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE,
