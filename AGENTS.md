@@ -9,15 +9,18 @@ Pi package that adds session-scoped `/loop` to [Pi](https://pi.dev). The command
 ### Structure
 
 ```
-extensions/index.ts       # Factory: /loop, /loops, scheduler_* tools, session lifecycle
-extensions/scheduler.ts   # SessionLoopScheduler
+extensions/index.ts       # Schemas, registrations, and forwarding to one LoopController
+extensions/controller.ts  # Loop commands, recovery/checkpoints, feedback, widget, lifecycle
+extensions/scheduler.ts   # Sole scheduling authority: tasks, dispatch state, and timers
 extensions/interval.ts    # Compact interval parse
 extensions/prompt.ts      # /loop instruction + scheduled fire content
 extensions/format.ts      # TUI widget and /loops list formatting
 extensions/types.ts       # customType constants
-tests/                    # Unit tests for the contract, interval, scheduler
+tests/                    # Controller behavior, factory wiring, scheduler, persistence, formatting
 package.json              # Pi manifest, peer deps, npm publish config
 ```
+
+The per-activation `LoopController` owns the Pi context and render/checkpoint caches. Its private scheduler returns `{ value, warning? }` for management mutations: checkpoint feedback belongs to the completed operation, not ambient warning state. The mutation hook checkpoints before rendering and before explicit restart dispatch. Disposal clears runtime resources without appending a snapshot.
 
 ### Key constraints
 
