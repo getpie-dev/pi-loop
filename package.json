@@ -1,6 +1,6 @@
 {
   "name": "@getpie/pi-loop",
-  "version": "0.0.3",
+  "version": "1.0.0",
   "description": "Session-scoped /loop for Pi: compact-interval scheduler_create / scheduler_list / scheduler_delete",
   "type": "module",
   "license": "MIT",
