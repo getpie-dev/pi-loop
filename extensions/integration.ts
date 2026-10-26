@@ -1,7 +1,10 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  SessionStartEvent,
+import { join } from "node:path";
+import {
+  CONFIG_DIR_NAME,
+  type ExtensionAPI,
+  type ExtensionContext,
+  getAgentDir,
+  type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
   formatLoopLine,
@@ -12,15 +15,9 @@ import {
 } from "./format.js";
 import { LoopError } from "./interval.js";
 import { pickLoopToManage } from "./list-ui.js";
+import { LoopManager } from "./manager.js";
 import { loopScheduleInstruction, resolveMaintenancePrompt } from "./prompt.js";
-import {
-  type CreateInput,
-  type CreateResult,
-  type MutationOutcome,
-  SessionLoopScheduler,
-  type TaskDefinition,
-  type UpdateInput,
-} from "./scheduler.js";
+import type { CreateResult, MutationOutcome, UpdateInput } from "./scheduler.js";
 import {
   LOOP_CUSTOM_TYPE,
   LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE,
@@ -34,14 +31,13 @@ interface CreateToolInput {
   fire_immediately?: boolean;
 }
 
-export class LoopController {
+export class LoopIntegration {
   private ctx: ExtensionContext | null = null;
   private lastWidget = "";
-  private lastSavedDefinitions: string | null = null;
-  private readonly scheduler: SessionLoopScheduler;
+  private readonly manager: LoopManager;
 
   constructor(private readonly pi: Pick<ExtensionAPI, "sendMessage" | "appendEntry">) {
-    this.scheduler = new SessionLoopScheduler({
+    this.manager = new LoopManager({
       clock: { now: () => Date.now() },
       dispatch: {
         isIdle: () => this.ctx?.isIdle() ?? false,
@@ -59,7 +55,15 @@ export class LoopController {
         },
       },
       onChange: () => this.refreshWidget(),
-      onMutation: (definitions) => this.checkpoint(definitions),
+      saveDefinitions: (tasks) => {
+        const ctx = this.ctx;
+        if (!ctx) throw new Error("Loop session is not active.");
+        this.pi.appendEntry(LOOP_STATE_CUSTOM_TYPE, {
+          version: 1,
+          sessionId: ctx.sessionManager.getSessionId(),
+          tasks,
+        });
+      },
       onWarning: (message) => this.ctx?.ui.notify(message, "warning"),
     });
   }
@@ -67,7 +71,6 @@ export class LoopController {
   recover(ctx: ExtensionContext, reason: SessionStartEvent["reason"]): void {
     this.ctx = ctx;
     this.lastWidget = "";
-    this.lastSavedDefinitions = null;
     let definitions: unknown[] = [];
     if (reason !== "new" && reason !== "fork") {
       const sessionId = ctx.sessionManager.getSessionId();
@@ -84,61 +87,34 @@ export class LoopController {
         break;
       }
     }
-    this.scheduler.startSession(definitions);
     // Reload may restore entries retained in memory after a failed append.
-    if (reason !== "reload")
-      this.lastSavedDefinitions = JSON.stringify(this.scheduler.definitions());
+    this.manager.restore(definitions, { checkpointRequired: reason === "reload" });
   }
 
   agentStarted(): void {
-    this.scheduler.markStarted();
+    this.manager.markStarted();
   }
 
   agentSettled(ctx: ExtensionContext): void {
     if (!this.ctx) return;
     this.ctx = ctx;
-    this.scheduler.handleSettled();
+    this.manager.settle();
   }
 
   dispose(): void {
     const ctx = this.ctx;
     this.ctx = null;
     this.lastWidget = "";
-    this.lastSavedDefinitions = null;
-    this.scheduler.dispose();
+    this.manager.dispose();
     if (ctx?.hasUI) ctx.ui.setWidget(WIDGET_ID, undefined);
-  }
-
-  create(input: CreateInput): MutationOutcome<CreateResult> {
-    return this.scheduler.create(input);
-  }
-
-  update(input: UpdateInput): MutationOutcome<CreateResult> {
-    return this.scheduler.update(input);
-  }
-
-  pause(id: string) {
-    return this.scheduler.stop(id);
-  }
-
-  resume(id: string): MutationOutcome<CreateResult> {
-    return this.scheduler.restart(id);
-  }
-
-  remove(id: string) {
-    return this.scheduler.delete(id);
-  }
-
-  list() {
-    return this.scheduler.list();
   }
 
   createTool(params: CreateToolInput) {
     const outcome = hasSchedulerId(params.id)
-      ? this.update(
+      ? this.manager.update(
           toUpdateInput({ id: params.id, prompt: params.prompt, interval: params.interval }),
         )
-      : this.create({
+      : this.manager.create({
           prompt: requireCreateField(params.prompt, "prompt"),
           interval: requireCreateField(params.interval, "interval"),
           fireImmediately: params.fire_immediately === true,
@@ -147,11 +123,11 @@ export class LoopController {
   }
 
   listTool() {
-    return textResult(JSON.stringify(this.list()));
+    return textResult(JSON.stringify(this.manager.list()));
   }
 
   deleteTool(id: string) {
-    const outcome = this.remove(id);
+    const outcome = this.manager.remove(id);
     if (outcome.value === "not_found") throw new LoopError("TASK_NOT_FOUND", `id ${id} not found`);
     const suffix = "Already dispatched work, if any, was not cancelled.";
     return this.mutationResult(
@@ -173,8 +149,10 @@ export class LoopController {
         content: loopScheduleInstruction(
           args,
           resolveMaintenancePrompt({
-            cwd: ctx.cwd,
-            isProjectTrusted: () => ctx.isProjectTrusted(),
+            projectFile: ctx.isProjectTrusted()
+              ? join(ctx.cwd, CONFIG_DIR_NAME, "loop.md")
+              : undefined,
+            userFile: join(getAgentDir(), "loop.md"),
           }),
         ),
         display: false,
@@ -187,7 +165,7 @@ export class LoopController {
     if (!this.ctx) return;
     this.ctx = ctx;
     while (true) {
-      const items = this.list();
+      const items = this.manager.list();
       const now = Date.now();
       if (items.length === 0) {
         ctx.ui.notify("No session loops. Use /loop [interval] [prompt] to create one.", "info");
@@ -209,13 +187,17 @@ export class LoopController {
         this.notifyMutation(
           ctx,
           "Paused loop. Already dispatched work was not cancelled.",
-          this.pause(result.id),
+          this.manager.pause(result.id),
         );
         continue;
       }
       if (result?.action === "restart") {
         try {
-          this.notifyMutation(ctx, "Restarted loop; queued until idle.", this.resume(result.id));
+          this.notifyMutation(
+            ctx,
+            "Restarted loop; queued until idle.",
+            this.manager.resume(result.id),
+          );
         } catch (error) {
           if (!(error instanceof LoopError)) throw error;
           ctx.ui.notify(error.message, "warning");
@@ -226,7 +208,7 @@ export class LoopController {
         this.notifyMutation(
           ctx,
           "Removed loop. Already dispatched work was not cancelled.",
-          this.remove(result.id),
+          this.manager.remove(result.id),
         );
         continue;
       }
@@ -234,29 +216,10 @@ export class LoopController {
     }
   }
 
-  private checkpoint(tasks: TaskDefinition[]): string | undefined {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    const serialized = JSON.stringify(tasks);
-    if (serialized === this.lastSavedDefinitions) return;
-    try {
-      this.pi.appendEntry(LOOP_STATE_CUSTOM_TYPE, {
-        version: 1,
-        sessionId: ctx.sessionManager.getSessionId(),
-        tasks,
-      });
-      this.lastSavedDefinitions = serialized;
-    } catch {
-      // Pi may retain the failed entry in memory; a later explicit operation must save again.
-      this.lastSavedDefinitions = null;
-      return "Loop change applied in memory but could not be saved for restart.";
-    }
-  }
-
   private refreshWidget(): void {
     const ctx = this.ctx;
     if (!ctx?.hasUI) return;
-    const lines = formatWidgetLines(this.list(), Date.now());
+    const lines = formatWidgetLines(this.manager.list(), Date.now());
     const key = lines.join("\n");
     if (key === this.lastWidget) return;
     this.lastWidget = key;

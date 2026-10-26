@@ -1,6 +1,6 @@
 import { type ExtensionAPI, VERSION } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { LoopController } from "./controller.js";
+import { LoopIntegration } from "./integration.js";
 
 // Single object, not anyOf: Anthropic convertTools only copies top-level properties,
 // so a Union schema arrives as an empty input_schema.
@@ -53,7 +53,10 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
     );
   }
 
-  const loop = new LoopController(pi);
+  const loop = new LoopIntegration({
+    sendMessage: (message, options) => pi.sendMessage(message, options),
+    appendEntry: (customType, data) => pi.appendEntry(customType, data),
+  });
   pi.on("session_start", (event, ctx) => loop.recover(ctx, event.reason));
   pi.on("agent_start", () => loop.agentStarted());
   pi.on("agent_settled", (_event, ctx) => loop.agentSettled(ctx));
