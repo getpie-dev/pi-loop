@@ -60,6 +60,11 @@ export type UpdateInput =
   | { id: string; prompt: string; interval?: string }
   | { id: string; interval: string; prompt?: string };
 
+export interface MutationOutcome<T> {
+  value: T;
+  warning?: string;
+}
+
 export interface CreateResult {
   id: string;
   interval: string;
@@ -87,7 +92,7 @@ export interface SchedulerHost {
   clock: LoopClock;
   dispatch: LoopDispatch;
   onChange?: () => void;
-  onMutation?: () => void;
+  onMutation?: (definitions: TaskDefinition[]) => string | undefined;
   onWarning?: (message: string) => void;
 }
 
@@ -162,7 +167,7 @@ export class SessionLoopScheduler {
     this.notify();
   }
 
-  create(input: CreateInput): CreateResult {
+  create(input: CreateInput): MutationOutcome<CreateResult> {
     this.assertActive();
     this.assertPrompt(input.prompt);
     this.assertCapacity();
@@ -182,11 +187,11 @@ export class SessionLoopScheduler {
       stopped: false,
     };
     this.add(task);
-    this.mutated();
-    return this.toCreateResult(task, { updated: false, raised: parsed.raised });
+    const warning = this.mutated();
+    return { value: this.toCreateResult(task, { updated: false, raised: parsed.raised }), warning };
   }
 
-  update(input: UpdateInput): CreateResult {
+  update(input: UpdateInput): MutationOutcome<CreateResult> {
     this.assertActive();
     const task = this.tasks.get(input.id);
     if (!task) throw new LoopError("TASK_NOT_FOUND", `no scheduled loop with id ${input.id}`);
@@ -197,8 +202,11 @@ export class SessionLoopScheduler {
       task.interval = parsed.compact;
       task.intervalMs = parsed.ms;
     }
-    this.mutated();
-    return this.toCreateResult(task, { updated: true, raised: parsed?.raised ?? false });
+    const warning = this.mutated();
+    return {
+      value: this.toCreateResult(task, { updated: true, raised: parsed?.raised ?? false }),
+      warning,
+    };
   }
 
   list(): SchedulerListItem[] {
@@ -213,16 +221,19 @@ export class SessionLoopScheduler {
       .map((task) => this.toListItem(task));
   }
 
-  stop(id: string): "stopped" | "stopped_current_running" | "not_found" {
+  stop(id: string): MutationOutcome<"stopped" | "stopped_current_running" | "not_found"> {
     const task = this.tasks.get(id);
-    if (!task) return "not_found";
+    if (!task) return { value: "not_found" };
     task.stopped = true;
     task.pendingSince = null;
-    this.mutated();
-    return this.inFlight?.taskId === id ? "stopped_current_running" : "stopped";
+    const warning = this.mutated();
+    return {
+      value: this.inFlight?.taskId === id ? "stopped_current_running" : "stopped",
+      warning,
+    };
   }
 
-  restart(id: string): CreateResult {
+  restart(id: string): MutationOutcome<CreateResult> {
     this.assertActive();
     const task = this.tasks.get(id);
     if (!task) throw new LoopError("TASK_NOT_FOUND", `no scheduled loop with id ${id}`);
@@ -232,18 +243,23 @@ export class SessionLoopScheduler {
     task.pendingSince = now;
     const next = now + task.intervalMs;
     task.nextFireAt = next >= task.expiresAt ? null : next;
-    this.mutated();
+    const warning = this.mutated();
     this.dispatchPending();
-    return this.toCreateResult(task, { updated: true, raised: false });
+    return { value: this.toCreateResult(task, { updated: true, raised: false }), warning };
   }
 
-  delete(id: string): "deleted_before_dispatch" | "future_deleted_current_running" | "not_found" {
+  delete(
+    id: string,
+  ): MutationOutcome<"deleted_before_dispatch" | "future_deleted_current_running" | "not_found"> {
     const task = this.tasks.get(id);
-    if (!task) return "not_found";
+    if (!task) return { value: "not_found" };
     const running = this.inFlight?.taskId === id;
     this.remove(task);
-    this.mutated();
-    return running ? "future_deleted_current_running" : "deleted_before_dispatch";
+    const warning = this.mutated();
+    return {
+      value: running ? "future_deleted_current_running" : "deleted_before_dispatch",
+      warning,
+    };
   }
 
   private markDue(now: number): void {
@@ -390,9 +406,10 @@ export class SessionLoopScheduler {
     if (task) task.lastDispatch = { status, at: new Date(this.host.clock.now()).toISOString() };
   }
 
-  private mutated(): void {
-    this.host.onMutation?.();
+  private mutated(): string | undefined {
+    const warning = this.host.onMutation?.(this.definitions());
     this.notify();
+    return warning;
   }
 
   private notify(): void {

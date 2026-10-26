@@ -50,7 +50,10 @@ function setup(idle = true) {
   const scheduler = new SessionLoopScheduler({
     clock,
     dispatch,
-    onMutation: () => snapshots.push(scheduler.definitions()),
+    onMutation: (definitions) => {
+      snapshots.push(definitions);
+      return undefined;
+    },
     onWarning: (message) => warnings.push(message),
   });
   scheduler.startSession();
@@ -70,7 +73,7 @@ function fire(scheduler: SessionLoopScheduler): void {
 describe("scheduler", () => {
   it("dispatches a due recurring task when idle and coalesces misses", () => {
     const { clock, dispatch, sent, scheduler } = setup();
-    const created = scheduler.create({ prompt: "check deploy", interval: "5m" });
+    const created = scheduler.create({ prompt: "check deploy", interval: "5m" }).value;
     expect(created.interval).toBe("5m");
     expect(created.raised).toBe(false);
     expect(sent).toHaveLength(0);
@@ -99,7 +102,7 @@ describe("scheduler", () => {
 
   it("returns raised when the interval is lifted to 60s", () => {
     const { scheduler } = setup();
-    const created = scheduler.create({ prompt: "watch", interval: "30s" });
+    const created = scheduler.create({ prompt: "watch", interval: "30s" }).value;
     expect(created.interval).toBe("60s");
     expect(created.raised).toBe(true);
   });
@@ -124,7 +127,11 @@ describe("scheduler", () => {
 
   it("keeps a fireImmediately create pending while busy", () => {
     const { dispatch, sent, scheduler } = setup(false);
-    const created = scheduler.create({ prompt: "check CI", interval: "5m", fireImmediately: true });
+    const created = scheduler.create({
+      prompt: "check CI",
+      interval: "5m",
+      fireImmediately: true,
+    }).value;
     expect(created.pending).toBe(true);
     expect(created.interval).toBe("5m");
     expect(sent).toHaveLength(0);
@@ -146,7 +153,7 @@ describe("scheduler", () => {
       prompt: "ping once",
       interval: "5m",
       fireImmediately: true,
-    });
+    }).value;
     scheduler.dispatchPending();
     expect(sent).toHaveLength(1);
     clock.advance(DISPATCH_CONFIRM_MS + 1);
@@ -162,7 +169,11 @@ describe("scheduler", () => {
 
   it("does not time out a started run", () => {
     const { clock, sent, scheduler } = setup();
-    const created = scheduler.create({ prompt: "watch CI", interval: "5m", fireImmediately: true });
+    const created = scheduler.create({
+      prompt: "watch CI",
+      interval: "5m",
+      fireImmediately: true,
+    }).value;
     scheduler.dispatchPending();
     fire(scheduler);
     clock.advance(DISPATCH_CONFIRM_MS + 1);
@@ -173,9 +184,9 @@ describe("scheduler", () => {
 
   it("updates interval in place and keeps the next fire", () => {
     const { scheduler } = setup();
-    const created = scheduler.create({ prompt: "check deploy", interval: "5m" });
+    const created = scheduler.create({ prompt: "check deploy", interval: "5m" }).value;
     const next = created.next_fire_at;
-    const updated = scheduler.update({ id: created.id, interval: "10m" });
+    const updated = scheduler.update({ id: created.id, interval: "10m" }).value;
     expect(updated.updated).toBe(true);
     expect(updated.id).toBe(created.id);
     expect(updated.interval).toBe("10m");
@@ -186,13 +197,17 @@ describe("scheduler", () => {
 
   it("deletes future/pending without aborting in-flight work", () => {
     const { sent, scheduler } = setup();
-    const created = scheduler.create({ prompt: "watch CI", interval: "5m", fireImmediately: true });
+    const created = scheduler.create({
+      prompt: "watch CI",
+      interval: "5m",
+      fireImmediately: true,
+    }).value;
     scheduler.dispatchPending();
-    expect(scheduler.delete(created.id)).toBe("future_deleted_current_running");
+    expect(scheduler.delete(created.id).value).toBe("future_deleted_current_running");
     expect(sent).toHaveLength(1);
-    expect(scheduler.delete("deadbeef")).toBe("not_found");
-    const idle = scheduler.create({ prompt: "later", interval: "5m" });
-    expect(scheduler.delete(idle.id)).toBe("deleted_before_dispatch");
+    expect(scheduler.delete("deadbeef").value).toBe("not_found");
+    const idle = scheduler.create({ prompt: "later", interval: "5m" }).value;
+    expect(scheduler.delete(idle.id).value).toBe("deleted_before_dispatch");
   });
 
   it("caps at 50 tasks and no-ops ticks after shutdown", () => {
@@ -211,8 +226,8 @@ describe("scheduler", () => {
 
   it("stops firing until restart, then dispatches when idle", () => {
     const { clock, dispatch, sent, scheduler } = setup();
-    const created = scheduler.create({ prompt: "check deploy", interval: "5m" });
-    expect(scheduler.stop(created.id)).toBe("stopped");
+    const created = scheduler.create({ prompt: "check deploy", interval: "5m" }).value;
+    expect(scheduler.stop(created.id).value).toBe("stopped");
     expect(scheduler.list()[0]?.stopped).toBe(true);
 
     clock.nowMs = Date.parse(created.next_fire_at!);
@@ -220,17 +235,17 @@ describe("scheduler", () => {
     expect(sent).toHaveLength(0);
 
     dispatch.idle = true;
-    const restarted = scheduler.restart(created.id);
+    const restarted = scheduler.restart(created.id).value;
     expect(restarted.updated).toBe(true);
     expect(restarted.pending).toBe(false);
     expect(sent).toHaveLength(1);
     expect(scheduler.list()[0]?.stopped).toBe(false);
-    expect(scheduler.stop("deadbeef")).toBe("not_found");
+    expect(scheduler.stop("deadbeef").value).toBe("not_found");
   });
 
   it("validates the entire update before changing the task or persisting", () => {
     const { scheduler, snapshots } = setup();
-    const created = scheduler.create({ prompt: "original", interval: "5m" });
+    const created = scheduler.create({ prompt: "original", interval: "5m" }).value;
     const before = scheduler.definitions();
     expect(() =>
       scheduler.update({ id: created.id, prompt: "changed", interval: "invalid" }),
@@ -242,7 +257,7 @@ describe("scheduler", () => {
   it("never dispatches expired due or locally pending tasks, even on restart", () => {
     for (const fireImmediately of [false, true]) {
       const { scheduler, clock, dispatch, sent } = setup(false);
-      const created = scheduler.create({ prompt: "watch", interval: "1m", fireImmediately });
+      const created = scheduler.create({ prompt: "watch", interval: "1m", fireImmediately }).value;
       if (!fireImmediately) {
         clock.advance(60_000);
         scheduler.tick();
@@ -259,7 +274,11 @@ describe("scheduler", () => {
 
   it("does not retract dispatched work at expiry and records settlement, not success", () => {
     const { scheduler, clock, sent, snapshots } = setup();
-    const created = scheduler.create({ prompt: "watch", interval: "5m", fireImmediately: true });
+    const created = scheduler.create({
+      prompt: "watch",
+      interval: "5m",
+      fireImmediately: true,
+    }).value;
     scheduler.dispatchPending();
     expect(scheduler.list()[0]).toMatchObject({
       pending: true,
@@ -287,7 +306,7 @@ describe("scheduler", () => {
       prompt: "full standing order",
       interval: "5m",
       fireImmediately: true,
-    });
+    }).value;
     scheduler.stop(created.id);
     const definitions = scheduler.definitions();
     scheduler.dispose();
@@ -318,7 +337,11 @@ describe("scheduler", () => {
 
   it("persists only successful management mutations, including the final empty state", () => {
     const { scheduler, snapshots } = setup();
-    const created = scheduler.create({ prompt: "watch", interval: "5m", fireImmediately: true });
+    const created = scheduler.create({
+      prompt: "watch",
+      interval: "5m",
+      fireImmediately: true,
+    }).value;
     scheduler.update({ id: created.id, interval: "10m" });
     scheduler.stop(created.id);
     scheduler.restart(created.id);
