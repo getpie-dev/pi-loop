@@ -45,7 +45,7 @@ export function loopScheduleInstruction(args: string, maintenancePrompt: string)
     "1. Call scheduler_create with the interval, the prompt, and fire_immediately: true.",
     "   If the interval is rejected, fix the string rather than guessing.",
     "2. Confirm what's scheduled, the cadence, its stop condition, that it auto-expires after 7 days, and the id to cancel with scheduler_delete.",
-    "3. Do NOT execute the prompt inline. The scheduler fires it immediately.",
+    "3. Do NOT execute the prompt inline. The first fire is queued until the session is idle with no pending messages.",
     "",
     "## Changing an existing loop",
     "Call scheduler_create with its id and only the changed fields; do not delete and recreate.",

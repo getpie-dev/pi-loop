@@ -16,7 +16,11 @@ import {
   SessionLoopScheduler,
   type UpdateInput,
 } from "./scheduler.js";
-import { LOOP_CUSTOM_TYPE, LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE } from "./types.js";
+import {
+  LOOP_CUSTOM_TYPE,
+  LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE,
+  LOOP_STATE_CUSTOM_TYPE,
+} from "./types.js";
 
 // Single object, not anyOf: Anthropic convertTools only copies top-level properties,
 // so a Union schema arrives as an empty input_schema.
@@ -71,6 +75,8 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
 
   let ctxRef: ExtensionContext | null = null;
   let lastWidget = "";
+  let lastSavedDefinitions: string | null = null;
+  let persistenceWarning: string | null = null;
   const host: SchedulerHost = {
     clock: { now: () => Date.now() },
     dispatch: {
@@ -95,8 +101,37 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
       },
     },
     onChange: refreshWidget,
+    onMutation: () => {
+      if (!ctxRef) return;
+      persistenceWarning = null;
+      const tasks = scheduler.definitions();
+      const serialized = JSON.stringify(tasks);
+      if (serialized === lastSavedDefinitions) return;
+      try {
+        pi.appendEntry(LOOP_STATE_CUSTOM_TYPE, {
+          version: 1,
+          sessionId: ctxRef.sessionManager.getSessionId(),
+          tasks,
+        });
+        lastSavedDefinitions = serialized;
+      } catch {
+        // Pi may retain the failed entry in memory; a later explicit operation must save again.
+        lastSavedDefinitions = null;
+        persistenceWarning = "Loop change applied in memory but could not be saved for restart.";
+      }
+    },
+    onWarning: (message) => ctxRef?.ui.notify(message, "warning"),
   };
   const scheduler = new SessionLoopScheduler(host);
+
+  function persistenceFeedback(message: string): string {
+    return persistenceWarning ? `${message} Warning: ${persistenceWarning}` : message;
+  }
+
+  function mutationResult(message: string, details: CreateResult | Record<string, never> = {}) {
+    if (persistenceWarning && ctxRef?.hasUI) ctxRef.ui.notify(persistenceWarning, "warning");
+    return textResult(persistenceFeedback(message), details);
+  }
 
   function refreshWidget(): void {
     const ctx = ctxRef;
@@ -130,27 +165,61 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
       );
       if (result?.action === "stop") {
         scheduler.stop(result.id);
-        ctx.ui.notify("Stopped loop.", "info");
+        ctx.ui.notify(
+          persistenceFeedback("Paused loop. Already dispatched work was not cancelled."),
+          persistenceWarning ? "warning" : "info",
+        );
         continue;
       }
       if (result?.action === "restart") {
-        scheduler.restart(result.id);
-        ctx.ui.notify("Restarted loop.", "info");
+        try {
+          scheduler.restart(result.id);
+          ctx.ui.notify(
+            persistenceFeedback("Restarted loop; queued until idle."),
+            persistenceWarning ? "warning" : "info",
+          );
+        } catch (error) {
+          if (!(error instanceof LoopError)) throw error;
+          ctx.ui.notify(error.message, "warning");
+        }
         continue;
       }
       if (result?.action === "remove") {
         scheduler.delete(result.id);
-        ctx.ui.notify("Removed loop.", "info");
+        ctx.ui.notify(
+          persistenceFeedback("Removed loop. Already dispatched work was not cancelled."),
+          persistenceWarning ? "warning" : "info",
+        );
         continue;
       }
       return;
     }
   }
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", (event, ctx) => {
     ctxRef = ctx;
     lastWidget = "";
-    scheduler.startSession();
+    lastSavedDefinitions = null;
+    persistenceWarning = null;
+    let definitions: unknown[] = [];
+    if (event.reason !== "new" && event.reason !== "fork") {
+      const sessionId = ctx.sessionManager.getSessionId();
+      // Task management is session-wide, independent of conversation tree navigation.
+      for (const entry of [...ctx.sessionManager.getEntries()].reverse()) {
+        if (entry.type !== "custom" || entry.customType !== LOOP_STATE_CUSTOM_TYPE) continue;
+        const state = entry.data as {
+          version?: unknown;
+          sessionId?: unknown;
+          tasks?: unknown;
+        } | null;
+        if (state?.sessionId !== sessionId) continue;
+        if (state.version === 1 && Array.isArray(state.tasks)) definitions = state.tasks;
+        break;
+      }
+    }
+    scheduler.startSession(definitions);
+    // Reload may restore entries retained in memory after a failed append.
+    if (event.reason !== "reload") lastSavedDefinitions = JSON.stringify(scheduler.definitions());
   });
   pi.on("agent_start", () => {
     scheduler.markStarted();
@@ -163,6 +232,8 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
     scheduler.dispose();
     if (ctx.hasUI) ctx.ui.setWidget(WIDGET_ID, undefined);
     lastWidget = "";
+    lastSavedDefinitions = null;
+    persistenceWarning = null;
     ctxRef = null;
   });
 
@@ -225,7 +296,7 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
             interval: requireCreateField(params.interval, "interval"),
             fireImmediately: params.fire_immediately === true,
           });
-      return textResult(describeCreateResult(result), result);
+      return mutationResult(describeCreateResult(result), result);
     },
   });
 
@@ -250,12 +321,9 @@ export default function piLoopExtension(pi: ExtensionAPI): void {
       const outcome = scheduler.delete(params.id);
       if (outcome === "not_found")
         throw new LoopError("TASK_NOT_FOUND", `id ${params.id} not found`);
-      const suffix =
-        outcome === "future_deleted_current_running"
-          ? "Already dispatched work, if any, was not interrupted."
-          : "No work was in flight.";
-      return textResult(
-        `Loop ${params.id} stopped. Future and locally pending fires were removed. ${suffix}\n${outcome}`,
+      const suffix = "Already dispatched work, if any, was not cancelled.";
+      return mutationResult(
+        `Loop ${params.id} removed. Future and locally pending fires were removed. ${suffix}\n${outcome}`,
       );
     },
   });
@@ -292,11 +360,13 @@ function describeCreateResult(result: CreateResult): string {
     : `Loop ${result.id} created, every ${result.interval}`;
   const parts = [
     result.next_fire_at
-      ? `${head}, next fire at ${result.next_fire_at}.`
-      : `${head}, no future fire (expired).`,
+      ? `${head}, next interval fire at ${result.next_fire_at}.`
+      : `${head}, ${result.stopped ? "paused" : "no interval fire before expiry"}.`,
   ];
+  parts.push(`Expires at ${result.expires_at}.`);
   if (result.raised) parts.push("Interval was raised to the 60s minimum.");
-  if (!result.updated && result.pending) parts.push("First fire runs immediately.");
+  if (result.pending)
+    parts.push("A fire is queued until the session is idle with no pending messages.");
   return parts.join(" ");
 }
 

@@ -5,6 +5,8 @@ import {
   DISPATCH_CONFIRM_MS,
   type LoopDispatch,
   SessionLoopScheduler,
+  type TaskDefinition,
+  TTL_MS,
 } from "../extensions/scheduler.ts";
 
 class FakeClock {
@@ -43,10 +45,17 @@ function setup(idle = true) {
       sent.push(payload);
     },
   };
-  const scheduler = new SessionLoopScheduler({ clock, dispatch });
+  const snapshots: TaskDefinition[][] = [];
+  const warnings: string[] = [];
+  const scheduler = new SessionLoopScheduler({
+    clock,
+    dispatch,
+    onMutation: () => snapshots.push(scheduler.definitions()),
+    onWarning: (message) => warnings.push(message),
+  });
   scheduler.startSession();
   live.push(scheduler);
-  return { clock, dispatch, sent, scheduler };
+  return { clock, dispatch, sent, scheduler, snapshots, warnings };
 }
 
 function drain(scheduler: SessionLoopScheduler): void {
@@ -132,7 +141,7 @@ describe("scheduler", () => {
   });
 
   it("releases an unstarted inFlight after 30s without resending or deleting", () => {
-    const { clock, sent, scheduler } = setup();
+    const { clock, sent, scheduler, warnings } = setup();
     const created = scheduler.create({
       prompt: "ping once",
       interval: "5m",
@@ -143,7 +152,12 @@ describe("scheduler", () => {
     clock.advance(DISPATCH_CONFIRM_MS + 1);
     scheduler.tick();
     expect(sent).toHaveLength(1);
+    expect(scheduler.list()[0]?.last_dispatch?.status).toBe("unconfirmed_timeout");
     expect(scheduler.list().some((item) => item.id === created.id)).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("timed out; no retry was queued");
+    scheduler.tick();
+    expect(sent).toHaveLength(1);
   });
 
   it("does not time out a started run", () => {
@@ -212,6 +226,129 @@ describe("scheduler", () => {
     expect(sent).toHaveLength(1);
     expect(scheduler.list()[0]?.stopped).toBe(false);
     expect(scheduler.stop("deadbeef")).toBe("not_found");
+  });
+
+  it("validates the entire update before changing the task or persisting", () => {
+    const { scheduler, snapshots } = setup();
+    const created = scheduler.create({ prompt: "original", interval: "5m" });
+    const before = scheduler.definitions();
+    expect(() =>
+      scheduler.update({ id: created.id, prompt: "changed", interval: "invalid" }),
+    ).toThrow(/INVALID_INTERVAL/);
+    expect(scheduler.definitions()).toEqual(before);
+    expect(snapshots).toHaveLength(1);
+  });
+
+  it("never dispatches expired due or locally pending tasks, even on restart", () => {
+    for (const fireImmediately of [false, true]) {
+      const { scheduler, clock, dispatch, sent } = setup(false);
+      const created = scheduler.create({ prompt: "watch", interval: "1m", fireImmediately });
+      if (!fireImmediately) {
+        clock.advance(60_000);
+        scheduler.tick();
+      }
+      clock.nowMs = Date.parse(created.expires_at!);
+      expect(() => scheduler.restart(created.id)).toThrow(/TASK_EXPIRED/);
+      dispatch.idle = true;
+      scheduler.dispatchPending();
+      scheduler.tick();
+      expect(sent).toHaveLength(0);
+      expect(scheduler.list()).toEqual([]);
+    }
+  });
+
+  it("does not retract dispatched work at expiry and records settlement, not success", () => {
+    const { scheduler, clock, sent, snapshots } = setup();
+    const created = scheduler.create({ prompt: "watch", interval: "5m", fireImmediately: true });
+    scheduler.dispatchPending();
+    expect(scheduler.list()[0]).toMatchObject({
+      pending: true,
+      running: false,
+      last_dispatch: { status: "dispatched" },
+    });
+    scheduler.markStarted();
+    expect(scheduler.list()[0]?.running).toBe(true);
+    scheduler.handleSettled();
+    expect(scheduler.list()[0]?.last_dispatch?.status).toBe("settled");
+    scheduler.restart(created.id);
+    scheduler.markStarted();
+    clock.nowMs = Date.parse(created.expires_at!);
+    scheduler.tick();
+    expect(scheduler.list()[0]?.running).toBe(true);
+    scheduler.handleSettled();
+    expect(scheduler.list()).toEqual([]);
+    expect(sent).toHaveLength(2);
+    expect(snapshots).toHaveLength(2);
+  });
+
+  it("restores paused definitions without downtime replay or expiry extension", () => {
+    const { scheduler, clock, sent, snapshots } = setup();
+    const created = scheduler.create({
+      prompt: "full standing order",
+      interval: "5m",
+      fireImmediately: true,
+    });
+    scheduler.stop(created.id);
+    const definitions = scheduler.definitions();
+    scheduler.dispose();
+    clock.advance(3_600_000);
+    scheduler.startSession(definitions);
+    expect(scheduler.definitions()).toEqual(definitions);
+    expect(scheduler.list()[0]).toMatchObject({
+      stopped: true,
+      pending: false,
+      running: false,
+      expires_at: created.expires_at,
+    });
+    scheduler.tick();
+    expect(sent).toHaveLength(0);
+    scheduler.restart(created.id);
+    expect(sent).toHaveLength(1);
+    expect(scheduler.list()[0]?.next_fire_at).toBe(new Date(clock.now() + 300_000).toISOString());
+    expect(snapshots).toHaveLength(3);
+    expect(
+      snapshots
+        .flat()
+        .every(
+          (task) =>
+            Object.keys(task).sort().join() === "createdAt,expiresAt,id,interval,prompt,stopped",
+        ),
+    ).toBe(true);
+  });
+
+  it("persists only successful management mutations, including the final empty state", () => {
+    const { scheduler, snapshots } = setup();
+    const created = scheduler.create({ prompt: "watch", interval: "5m", fireImmediately: true });
+    scheduler.update({ id: created.id, interval: "10m" });
+    scheduler.stop(created.id);
+    scheduler.restart(created.id);
+    scheduler.markStarted();
+    scheduler.handleSettled();
+    scheduler.tick();
+    expect(snapshots).toHaveLength(4);
+    scheduler.delete(created.id);
+    expect(snapshots).toHaveLength(5);
+    expect(snapshots.at(-1)).toEqual([]);
+    scheduler.dispose();
+    scheduler.startSession();
+    scheduler.tick();
+    expect(snapshots).toHaveLength(5);
+  });
+
+  it("skips malformed and expired definitions on recovery", () => {
+    const { scheduler, clock } = setup();
+    scheduler.create({ prompt: "watch", interval: "5m" });
+    const definition = scheduler.definitions()[0]!;
+    scheduler.startSession([
+      null,
+      { ...definition, prompt: "" },
+      { ...definition, interval: "bad" },
+      { ...definition, stopped: "yes" },
+    ]);
+    expect(scheduler.list()).toEqual([]);
+    clock.advance(TTL_MS);
+    scheduler.startSession([definition]);
+    expect(scheduler.list()).toEqual([]);
   });
 
   it("rejects empty and oversized prompts with distinct codes", () => {

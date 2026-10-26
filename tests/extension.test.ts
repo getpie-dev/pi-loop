@@ -1,8 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import piLoopExtension from "../extensions/index.ts";
 import type { CreateResult } from "../extensions/scheduler.ts";
-import { LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE } from "../extensions/types.ts";
+import {
+  LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE,
+  LOOP_STATE_CUSTOM_TYPE,
+} from "../extensions/types.ts";
 
 const host = vi.hoisted(() => ({ VERSION: "1.4.0" }));
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
@@ -17,19 +20,41 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 
 beforeEach(() => {
   host.VERSION = "1.4.0";
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
 });
 
 type Handler = (...args: never[]) => unknown;
 
-function fakePi() {
+type StateEntry = { type: "custom"; customType: string; data: unknown };
+
+function fakePi(sessionId = "original", entries: StateEntry[] = []) {
   const commands = new Map<string, { description?: string; handler: Handler }>();
   const tools = new Map<string, { description: string; parameters: unknown; execute: Handler }>();
   const events = new Map<string, Handler>();
   const sent: Array<{ message: Record<string, unknown>; options?: Record<string, unknown> }> = [];
   const pi = {
     on(event: string, handler: Handler) {
-      events.set(event, handler);
+      events.set(event, ((payload: unknown, ctx: Record<string, unknown>) => {
+        if (event === "session_start") {
+          ctx.sessionManager = {
+            getSessionId: () => sessionId,
+            getEntries: () => entries,
+            getBranch: () => {
+              throw new Error("task state must be session-wide");
+            },
+          };
+        }
+        return handler((payload ?? { reason: "startup" }) as never, ctx as never);
+      }) as Handler);
     },
+    appendEntry: vi.fn((customType: string, data: unknown) => {
+      entries.push({ type: "custom", customType, data });
+    }),
     registerCommand(name: string, options: { description?: string; handler: Handler }) {
       commands.set(name, options);
     },
@@ -49,7 +74,7 @@ function fakePi() {
     },
   };
   piLoopExtension(pi as unknown as ExtensionAPI);
-  return { commands, tools, events, sent };
+  return { commands, tools, events, sent, entries, appendEntry: pi.appendEntry };
 }
 
 describe("minimum host version", () => {
@@ -172,7 +197,7 @@ describe("extension contract", () => {
     expect(created.raised).toBe(true);
     expect(created.updated).toBe(false);
     expect(createdRaw.content[0]!.text).toBe(
-      `Loop ${created.id} created, every 60s, next fire at ${created.next_fire_at}. Interval was raised to the 60s minimum.`,
+      `Loop ${created.id} created, every 60s, next interval fire at ${created.next_fire_at}. Expires at ${created.expires_at}. Interval was raised to the 60s minimum.`,
     );
 
     const immediateRaw = (await tools
@@ -182,7 +207,9 @@ describe("extension contract", () => {
         { prompt: "check deploy", interval: "5m", fire_immediately: true } as never,
       )) as { content: Array<{ text: string }>; details: CreateResult };
     expect(immediateRaw.details.pending).toBe(true);
-    expect(immediateRaw.content[0]!.text).toContain("First fire runs immediately.");
+    expect(immediateRaw.content[0]!.text).toContain(
+      "A fire is queued until the session is idle with no pending messages.",
+    );
     expect(immediateRaw.content[0]!.text).not.toContain("60s minimum");
 
     const updatedRaw = (await tools
@@ -196,7 +223,7 @@ describe("extension contract", () => {
     expect(updated.interval).toBe("10m");
     expect(updated.updated).toBe(true);
     expect(updatedRaw.content[0]!.text).toBe(
-      `Loop ${created.id} updated, every 10m, next fire at ${updated.next_fire_at}.`,
+      `Loop ${created.id} updated, every 10m, next interval fire at ${updated.next_fire_at}. Expires at ${updated.expires_at}.`,
     );
 
     const queuedUpdateRaw = (await tools
@@ -207,7 +234,9 @@ describe("extension contract", () => {
     };
     expect(queuedUpdateRaw.details.pending).toBe(true);
     expect(queuedUpdateRaw.details.updated).toBe(true);
-    expect(queuedUpdateRaw.content[0]!.text).not.toContain("First fire runs immediately.");
+    expect(queuedUpdateRaw.content[0]!.text).toContain(
+      "A fire is queued until the session is idle",
+    );
 
     await expect(
       tools.get("scheduler_create")!.execute(undefined as never, { id: created.id } as never),
@@ -299,7 +328,7 @@ describe("extension contract", () => {
     );
     expect(remaining).toHaveLength(2);
     expect(remaining.find((item: { id: string }) => item.id === createdId)?.stopped).toBe(true);
-    expect(notices).toContain("Stopped loop.");
+    expect(notices).toContain("Paused loop. Already dispatched work was not cancelled.");
   });
 
   it("restarts and removes loops from the TUI picker", async () => {
@@ -331,8 +360,8 @@ describe("extension contract", () => {
     createdId = createdRaw.details.id;
 
     await commands.get("loops")!.handler("" as never, ctx as never);
-    expect(notices).toContain("Restarted loop.");
-    expect(notices).toContain("Removed loop.");
+    expect(notices).toContain("Restarted loop; queued until idle.");
+    expect(notices).toContain("Removed loop. Already dispatched work was not cancelled.");
     expect(await tools.get("scheduler_list")!.execute()).toMatchObject({
       content: [{ type: "text", text: "[]" }],
     });
@@ -361,5 +390,216 @@ describe("extension contract", () => {
     const last = widgets.at(-1);
     expect(Array.isArray(last)).toBe(true);
     expect(String((last as string[])[0])).toContain("check deploy");
+  });
+});
+
+describe("same-session snapshots", () => {
+  const context = () => ({
+    cwd: process.cwd(),
+    hasUI: false,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    ui: { notify: () => undefined },
+  });
+  const start = async (pi: ReturnType<typeof fakePi>, reason = "startup") => {
+    await pi.events.get("session_start")!({ reason } as never, context() as never);
+  };
+  const create = async (pi: ReturnType<typeof fakePi>, params: object) =>
+    (await pi.tools.get("scheduler_create")!.execute("test" as never, params as never)) as {
+      details: CreateResult;
+      content: { text: string }[];
+    };
+  const list = async (pi: ReturnType<typeof fakePi>) =>
+    JSON.parse(
+      ((await pi.tools.get("scheduler_list")!.execute()) as { content: { text: string }[] })
+        .content[0]!.text,
+    );
+
+  it("reopens the original session with full definitions and a fresh next deadline", async () => {
+    const original = fakePi();
+    await start(original);
+    const { details } = await create(original, {
+      prompt: `standing order ${"x".repeat(100)}`,
+      interval: "5m",
+      fire_immediately: true,
+    });
+    expect(original.entries).toHaveLength(1);
+    const snapshot = original.entries[0]!;
+    expect(snapshot.customType).toBe(LOOP_STATE_CUSTOM_TYPE);
+    expect(snapshot.data).toMatchObject({
+      version: 1,
+      sessionId: "original",
+      tasks: [{ id: details.id, stopped: false }],
+    });
+    await original.events.get("session_shutdown")!({} as never, context() as never);
+    expect(original.entries).toHaveLength(1);
+    vi.setSystemTime(Date.now() + 3_600_000);
+    const reopened = fakePi("original", original.entries);
+    await start(reopened);
+    expect(await list(reopened)).toMatchObject([
+      {
+        id: details.id,
+        pending: false,
+        running: false,
+        expires_at: details.expires_at,
+        next_fire_at: new Date(Date.now() + 300_000).toISOString(),
+      },
+    ]);
+    vi.advanceTimersByTime(1000);
+    expect(reopened.sent).toEqual([]);
+    expect(reopened.entries).toHaveLength(1);
+  });
+
+  it("uses latest updates and deletes across session-wide entries, including empty snapshots", async () => {
+    const original = fakePi();
+    await start(original);
+    const { details } = await create(original, { prompt: "old", interval: "5m" });
+    await create(original, { id: details.id, prompt: "updated", interval: "10m" });
+    const reopened = fakePi("original", original.entries);
+    await start(reopened, "reload");
+    expect(await list(reopened)).toMatchObject([
+      { id: details.id, interval: "10m", prompt_preview: "updated" },
+    ]);
+    await reopened.tools
+      .get("scheduler_delete")!
+      .execute("test" as never, { id: details.id } as never);
+    expect(original.entries.at(-1)?.data).toEqual({ version: 1, sessionId: "original", tasks: [] });
+    await start(reopened, "resume");
+    expect(await list(reopened)).toEqual([]);
+    expect(original.entries).toHaveLength(3);
+  });
+
+  it("starts new and fork sessions empty and rejects copied ownership on cold forks", async () => {
+    const original = fakePi();
+    await start(original);
+    await create(original, { prompt: "original only", interval: "5m" });
+    for (const reason of ["new", "fork", "startup"]) {
+      const fork = fakePi("fork-id", [...original.entries]);
+      await start(fork, reason);
+      expect(await list(fork)).toEqual([]);
+      const { details } = await create(fork, { prompt: "fork own task", interval: "10m" });
+      const resumedFork = fakePi("fork-id", fork.entries);
+      await start(resumedFork);
+      expect(await list(resumedFork)).toMatchObject([
+        { id: details.id, prompt_preview: "fork own task" },
+      ]);
+    }
+    const resumedOriginal = fakePi("original", original.entries);
+    await start(resumedOriginal, "resume");
+    expect(await list(resumedOriginal)).toMatchObject([{ prompt_preview: "original only" }]);
+  });
+
+  it("writes only changed recoverable definitions, including pause/restart and final deletion", async () => {
+    const pi = fakePi();
+    await start(pi);
+    const { details } = await create(pi, { prompt: "watch", interval: "5m" });
+    await create(pi, { id: details.id, prompt: "watch", interval: "5m" });
+    expect(pi.appendEntry).toHaveBeenCalledTimes(1);
+    await start(pi, "reload");
+    expect(pi.appendEntry).toHaveBeenCalledTimes(1);
+    await create(pi, { id: details.id, prompt: "watch", interval: "5m" });
+    expect(pi.appendEntry).toHaveBeenCalledTimes(2);
+    await create(pi, { id: details.id, prompt: "watch", interval: "5m" });
+    expect(pi.appendEntry).toHaveBeenCalledTimes(2);
+    let action: string | null = null;
+    const ctx = {
+      ...context(),
+      hasUI: true,
+      ui: {
+        notify: () => undefined,
+        setWidget: () => undefined,
+        custom: async () => {
+          const current = action;
+          action = null;
+          return current ? { action: current, id: details.id } : { action: "close" };
+        },
+      },
+    };
+    await pi.events.get("session_start")!({ reason: "reload" } as never, ctx as never);
+    for (const [next, expected] of [
+      ["restart", 3],
+      ["stop", 4],
+      ["stop", 4],
+      ["restart", 5],
+      ["restart", 5],
+      ["remove", 6],
+    ] as const) {
+      action = next;
+      await pi.commands.get("loops")!.handler("" as never, ctx as never);
+      expect(pi.appendEntry).toHaveBeenCalledTimes(expected);
+    }
+    expect(pi.entries.at(-1)?.data).toEqual({ version: 1, sessionId: "original", tasks: [] });
+    await start(pi, "resume");
+    expect(await list(pi)).toEqual([]);
+  });
+
+  it("reports append failures as applied in memory with IDs and does not deduplicate unsaved changes", async () => {
+    const pi = fakePi();
+    const notices: string[] = [];
+    const ctx = {
+      ...context(),
+      hasUI: true,
+      ui: {
+        notify: (message: string) => notices.push(message),
+        setWidget: () => undefined,
+      },
+    };
+    await pi.events.get("session_start")!({ reason: "startup" } as never, ctx as never);
+    const failAppend = () =>
+      pi.appendEntry.mockImplementationOnce((customType, data) => {
+        // Pi adds the entry to session memory before a filesystem write can fail.
+        pi.entries.push({ type: "custom", customType, data });
+        throw new Error("EISDIR");
+      });
+    failAppend();
+    const created = await create(pi, { prompt: "watch", interval: "5m", fire_immediately: true });
+    const id = created.details.id;
+    expect(created.content[0]!.text).toContain(id);
+    expect(created.content[0]!.text).toContain(
+      "applied in memory but could not be saved for restart",
+    );
+    expect(notices.at(-1)).toContain("applied in memory but could not be saved for restart");
+    expect(await list(pi)).toMatchObject([{ id }]);
+    vi.advanceTimersByTime(1000);
+    expect(pi.sent).toHaveLength(1);
+    expect(pi.appendEntry).toHaveBeenCalledTimes(1);
+    const saved = await create(pi, { id, prompt: "watch" });
+    expect(saved.content[0]!.text).not.toContain("could not be saved");
+    expect(pi.appendEntry).toHaveBeenCalledTimes(2);
+    await create(pi, { id, prompt: "watch" });
+    expect(pi.appendEntry).toHaveBeenCalledTimes(2);
+    failAppend();
+    const updated = await create(pi, { id, prompt: "changed" });
+    expect(updated.content[0]!.text).toContain(id);
+    expect(updated.content[0]!.text).toContain("could not be saved for restart");
+    await create(pi, { id, prompt: "watch" });
+    expect(pi.appendEntry).toHaveBeenCalledTimes(4);
+    failAppend();
+    const removed = (await pi.tools
+      .get("scheduler_delete")!
+      .execute("test" as never, { id } as never)) as { content: { text: string }[] };
+    expect(removed.content[0]!.text).toContain(id);
+    expect(removed.content[0]!.text).toContain("could not be saved for restart");
+    expect(await list(pi)).toEqual([]);
+    const replacement = await create(pi, { prompt: "replacement", interval: "5m" });
+    await pi.tools
+      .get("scheduler_delete")!
+      .execute("test" as never, { id: replacement.details.id } as never);
+    expect(pi.entries.at(-1)?.data).toEqual({ version: 1, sessionId: "original", tasks: [] });
+    await start(pi, "resume");
+    expect(await list(pi)).toEqual([]);
+  });
+
+  it("ignores unsupported or malformed owned state without resurrecting earlier tasks", async () => {
+    const pi = fakePi();
+    await start(pi);
+    await create(pi, { prompt: "old", interval: "5m" });
+    pi.entries.push({
+      type: "custom",
+      customType: LOOP_STATE_CUSTOM_TYPE,
+      data: { version: 2, sessionId: "original", tasks: [] },
+    });
+    await start(pi);
+    expect(await list(pi)).toEqual([]);
   });
 });
