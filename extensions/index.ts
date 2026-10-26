@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, VERSION } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
   formatLoopLine,
@@ -56,6 +56,19 @@ const SchedulerDeleteParams = Type.Object(
 const SchedulerListParams = Type.Object({}, { additionalProperties: false });
 
 export default function piLoopExtension(pi: ExtensionAPI): void {
+  const version = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.exec(VERSION);
+  const major = Number(version?.[1]);
+  const minor = Number(version?.[2]);
+  const patch = Number(version?.[3]);
+  const supported =
+    major > 1 ||
+    (major === 1 && (minor > 4 || (minor === 4 && (patch > 0 || (patch === 0 && !version?.[4])))));
+  if (!supported) {
+    throw new Error(
+      `@getpie/pi-loop requires Pi >= 1.4.0 (running ${VERSION}). Upgrade Pi and reload the extension.`,
+    );
+  }
+
   let ctxRef: ExtensionContext | null = null;
   let lastWidget = "";
   const host: SchedulerHost = {

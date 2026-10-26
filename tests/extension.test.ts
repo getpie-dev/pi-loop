@@ -1,8 +1,23 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import piLoopExtension from "../extensions/index.ts";
 import type { CreateResult } from "../extensions/scheduler.ts";
 import { LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE } from "../extensions/types.ts";
+
+const host = vi.hoisted(() => ({ VERSION: "1.4.0" }));
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return {
+    ...actual,
+    get VERSION() {
+      return host.VERSION;
+    },
+  };
+});
+
+beforeEach(() => {
+  host.VERSION = "1.4.0";
+});
 
 type Handler = (...args: never[]) => unknown;
 
@@ -36,6 +51,37 @@ function fakePi() {
   piLoopExtension(pi as unknown as ExtensionAPI);
   return { commands, tools, events, sent };
 }
+
+describe("minimum host version", () => {
+  it.each(["0.84.2", "1.3.99", "1.4.0-rc.1"])(
+    "rejects Pi %s before registering any capabilities",
+    (version) => {
+      host.VERSION = version;
+      const pi = {
+        on: vi.fn(),
+        registerCommand: vi.fn(),
+        registerTool: vi.fn(),
+      };
+      expect(() => piLoopExtension(pi as unknown as ExtensionAPI)).toThrow(
+        `@getpie/pi-loop requires Pi >= 1.4.0 (running ${version}). Upgrade Pi and reload the extension.`,
+      );
+      expect(pi.on).not.toHaveBeenCalled();
+      expect(pi.registerCommand).not.toHaveBeenCalled();
+      expect(pi.registerTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["1.4.0", "1.4.0+build.1", "1.4.1", "1.5.0", "1.10.0", "2.0.0"])(
+    "activates on Pi %s",
+    (version) => {
+      host.VERSION = version;
+      const { commands, tools, events } = fakePi();
+      expect([...commands.keys()]).toEqual(["loop", "loops"]);
+      expect([...tools.keys()]).toEqual(["scheduler_create", "scheduler_list", "scheduler_delete"]);
+      expect(events.has("session_start")).toBe(true);
+    },
+  );
+});
 
 describe("extension contract", () => {
   it("registers /loop, scheduler tools, and settled lifecycle", () => {
