@@ -24,7 +24,7 @@ package.json              # Pi manifest, peer deps, npm publish config
 - **No build step** — pi loads `.ts` via jiti. Do not add a compile step.
 - **Peer dependencies** — `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `@earendil-works/pi-agent-core`, `typebox` are provided by pi at runtime. Keep `"*"` ranges. Do not bundle them.
 - **No Xiaohu/pie host deps** — this package must run in stock Pi CLI.
-- **In-memory only** — no disk persistence, no cross-session recovery.
+- **Session-owned persistence** — save definitions and pause state using Pi >= 1.4.0 public session records. Restore only the same session; no separate database, cross-session inheritance, downtime replay, or background execution. `--no-session` stays ephemeral.
 - **2-space indentation** — biome.
 
 ### Behaviour that must not regress
@@ -71,7 +71,7 @@ Always use `-ne` with `-e .` so globally installed extensions do not interfere.
 ## Anti-patterns
 
 - Do not import Xiaohu or pie packages.
-- Do not persist tasks to disk unless the user asks for it.
+- Do not write a custom task database. Persist only versioned, session-owned definition snapshots through `pi.appendEntry`; use `getEntries()` for session-wide restoration. Never persist pending/running state, countdown ticks, or shutdown cleanup.
 - Do not fire while the session is busy or has pending messages.
 - Do not use `steer` to inject loop prompts.
 - Tool parameters must use typebox, not raw TypeScript types.

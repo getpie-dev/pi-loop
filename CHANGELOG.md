@@ -7,8 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Restore task definitions and pause state from the original Pi session, preserving IDs and absolute expiry without replaying downtime. New/forked sessions and `--no-session` do not inherit tasks.
+- Show the latest transient dispatch fact in `scheduler_list` and warn when start confirmation times out, without automatic retry. Settlement does not imply business success.
+
+### Fixed
+
+- Skip duplicate recovery snapshots for unchanged task definitions, including repeated pause/restart requests. After reload, checkpoint once on the next explicit management operation because restored in-memory entries may not be saved.
+- Report session-save failures as applied-in-memory changes with a warning, preserving task IDs and allowing later explicit operations to save again.
+- Validate all update fields before changing a task.
+- Prevent new dispatch at or after expiry, including pending fires and expired restarts, without interrupting already dispatched work.
+
 ### Changed
 
+- Include cadence, next planned fire, and expiry in create/update feedback. Describe immediate fires as queued until idle; pause/remove does not cancel dispatched work. Keep the existing single-line widget.
 - Require Pi >= 1.4.0 and use Pi 1.4.0 for development and tests. Older hosts receive an upgrade message instead of activating the extension.
 
 ## 0.0.3 (2026-09-08)
