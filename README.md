@@ -6,6 +6,8 @@ Fires with `sendMessage({ customType: "@getpie/pi-loop" }, { triggerTurn: true }
 
 ## Install
 
+Requires Pi >= 1.4.0. Older hosts cannot activate the extension and receive an upgrade message.
+
 ```bash
 pi install git:github.com/getpie-dev/pi-loop
 ```
@@ -53,6 +55,8 @@ In TUI, active loops stay above the input as `[loop] next 12s · prompt`. `/loop
 - No restart recovery, no queue revoke, no loop-scoped abort.
 
 ## Develop
+
+Development and tests use Pi 1.4.0.
 
 ```bash
 npm install
