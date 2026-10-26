@@ -1,6 +1,4 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_INTERVAL, LoopError } from "./interval.js";
 
 export const PROMPT_MAX_BYTES = 25_000;
@@ -68,14 +66,14 @@ export function buildScheduledContent(prompt: string, id: string, interval: stri
 }
 
 export function resolveMaintenancePrompt(options: {
-  cwd: string;
-  isProjectTrusted: () => boolean;
+  projectFile?: string;
+  userFile: string;
 }): string {
-  if (options.isProjectTrusted()) {
-    const project = readLoopMd(join(options.cwd, CONFIG_DIR_NAME, "loop.md"));
+  if (options.projectFile) {
+    const project = readLoopMd(options.projectFile);
     if (project) return project;
   }
-  const user = readLoopMd(join(getAgentDir(), "loop.md"));
+  const user = readLoopMd(options.userFile);
   return user ?? BUILTIN_MAINTENANCE_PROMPT;
 }
 

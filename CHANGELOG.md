@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Encapsulate Loop coordination in one per-activation controller with explicit mutation outcomes; Pi tool responses, snapshot records, and the compact widget remain unchanged.
+- Encapsulate Loop orchestration and checkpoint policy in a host-independent `LoopManager`, bridged by explicit Pi integration callbacks. Pi tool responses, snapshot records, operation-scoped save warnings, and the compact widget remain unchanged.
 - Direct `SessionLoopScheduler` create/update/stop/restart/delete calls now return `{ value, warning? }`; mutation hooks receive definitions and return an optional save warning.
 - Include cadence, next planned fire, and expiry in create/update feedback. Describe immediate fires as queued until idle; pause/remove does not cancel dispatched work. Keep the existing single-line widget.
 - Require Pi >= 1.4.0 and use Pi 1.4.0 for development and tests. Older hosts receive an upgrade message instead of activating the extension.

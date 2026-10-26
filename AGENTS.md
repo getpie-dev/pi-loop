@@ -9,18 +9,19 @@ Pi package that adds session-scoped `/loop` to [Pi](https://pi.dev). The command
 ### Structure
 
 ```
-extensions/index.ts       # Schemas, registrations, and forwarding to one LoopController
-extensions/controller.ts  # Loop commands, recovery/checkpoints, feedback, widget, lifecycle
+extensions/index.ts       # TypeBox schemas, registrations, and explicit Pi operation adapters
+extensions/integration.ts # Pi lifecycle/records, commands/tools, prompt trust, picker, widget
+extensions/manager.ts     # Host-independent LoopManager: orchestration and checkpoint/dedup policy
 extensions/scheduler.ts   # Sole scheduling authority: tasks, dispatch state, and timers
 extensions/interval.ts    # Compact interval parse
 extensions/prompt.ts      # /loop instruction + scheduled fire content
 extensions/format.ts      # TUI widget and /loops list formatting
 extensions/types.ts       # customType constants
-tests/                    # Controller behavior, factory wiring, scheduler, persistence, formatting
+tests/                    # Domain manager, Pi integration/wiring, scheduler, persistence, formatting
 package.json              # Pi manifest, peer deps, npm publish config
 ```
 
-The per-activation `LoopController` owns the Pi context and render/checkpoint caches. Its private scheduler returns `{ value, warning? }` for management mutations: checkpoint feedback belongs to the completed operation, not ambient warning state. The mutation hook checkpoints before rendering and before explicit restart dispatch. Disposal clears runtime resources without appending a snapshot.
+The host-independent `LoopManager` accepts only domain clock/dispatch, definition-storage, and change/warning capabilities. It owns checkpoint deduplication around exactly one private scheduler; restoration accepts definitions and a checkpoint-required flag, never a Pi context or lifecycle reason. `LoopIntegration` localizes the Pi context/render cache, session record selection/envelopes, and all command/tool/UI translation. Management mutations return `{ value, warning? }`: checkpoint feedback belongs to the completed operation, not ambient warning state. The mutation hook checkpoints before change notification and explicit restart dispatch. Disposal clears runtime resources without appending a snapshot.
 
 ### Key constraints
 

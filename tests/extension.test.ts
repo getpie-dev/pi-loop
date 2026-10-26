@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LoopController } from "../extensions/controller.ts";
 import piLoopExtension from "../extensions/index.ts";
+import { LoopIntegration } from "../extensions/integration.ts";
 import { LOOP_CUSTOM_TYPE, LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE } from "../extensions/types.ts";
 
 const host = vi.hoisted(() => ({ VERSION: "1.4.0" }));
@@ -141,19 +141,23 @@ describe("extension contract", () => {
     expect(schema.properties).not.toHaveProperty("run_at");
   });
 
-  it("forwards lifecycle, commands and tools to its controller", async () => {
-    const recover = vi.spyOn(LoopController.prototype, "recover").mockImplementation(() => {});
-    const started = vi.spyOn(LoopController.prototype, "agentStarted").mockImplementation(() => {});
-    const settled = vi.spyOn(LoopController.prototype, "agentSettled").mockImplementation(() => {});
-    const dispose = vi.spyOn(LoopController.prototype, "dispose").mockImplementation(() => {});
+  it("forwards lifecycle, commands and tools to its Pi integration", async () => {
+    const recover = vi.spyOn(LoopIntegration.prototype, "recover").mockImplementation(() => {});
+    const started = vi
+      .spyOn(LoopIntegration.prototype, "agentStarted")
+      .mockImplementation(() => {});
+    const settled = vi
+      .spyOn(LoopIntegration.prototype, "agentSettled")
+      .mockImplementation(() => {});
+    const dispose = vi.spyOn(LoopIntegration.prototype, "dispose").mockImplementation(() => {});
     const command = vi
-      .spyOn(LoopController.prototype, "handleLoopCommand")
+      .spyOn(LoopIntegration.prototype, "handleLoopCommand")
       .mockResolvedValue(undefined);
-    const show = vi.spyOn(LoopController.prototype, "showLoops").mockResolvedValue(undefined);
+    const show = vi.spyOn(LoopIntegration.prototype, "showLoops").mockResolvedValue(undefined);
     const response = { content: [{ type: "text" as const, text: "forwarded" }], details: {} };
-    const create = vi.spyOn(LoopController.prototype, "createTool").mockReturnValue(response);
-    const list = vi.spyOn(LoopController.prototype, "listTool").mockReturnValue(response);
-    const remove = vi.spyOn(LoopController.prototype, "deleteTool").mockReturnValue(response);
+    const create = vi.spyOn(LoopIntegration.prototype, "createTool").mockReturnValue(response);
+    const list = vi.spyOn(LoopIntegration.prototype, "listTool").mockReturnValue(response);
+    const remove = vi.spyOn(LoopIntegration.prototype, "deleteTool").mockReturnValue(response);
     const { events, commands, tools } = fakePi();
     const ctx = {} as never;
     await events.get("session_start")!({ reason: "reload" } as never, ctx);

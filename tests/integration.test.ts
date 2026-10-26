@@ -1,9 +1,13 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { queryObjects } from "node:v8";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LoopController } from "../extensions/controller.ts";
 import { WIDGET_ID } from "../extensions/format.ts";
+import { LoopIntegration } from "../extensions/integration.ts";
 import type { LoopPickResult } from "../extensions/list-ui.ts";
+import { LoopManager } from "../extensions/manager.ts";
+import type { SchedulerListItem } from "../extensions/scheduler.ts";
 import {
   LOOP_CUSTOM_TYPE,
   LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE,
@@ -11,12 +15,14 @@ import {
 } from "../extensions/types.ts";
 
 type StateEntry = { type: "custom"; customType: string; data: unknown };
-const live: LoopController[] = [];
+const live: LoopIntegration[] = [];
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   for (const loop of live) loop.dispose();
   live.length = 0;
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -25,14 +31,14 @@ function setup(sessionId = "original", entries: StateEntry[] = []) {
   const appendEntry = vi.fn((customType: string, data?: unknown) => {
     entries.push({ type: "custom", customType, data });
   });
-  const loop = new LoopController({ sendMessage, appendEntry });
+  const loop = new LoopIntegration({ sendMessage, appendEntry });
   live.push(loop);
   const ctx = {
     cwd: process.cwd(),
     hasUI: false,
     isIdle: vi.fn(() => true),
     hasPendingMessages: vi.fn(() => false),
-    isProjectTrusted: () => false,
+    isProjectTrusted: vi.fn(() => false),
     sessionManager: {
       getSessionId: () => sessionId,
       getEntries: () => entries,
@@ -51,7 +57,10 @@ function setup(sessionId = "original", entries: StateEntry[] = []) {
   return { loop, ctx, context, entries, sendMessage, appendEntry };
 }
 
-describe("LoopController", () => {
+const list = (loop: LoopIntegration): SchedulerListItem[] =>
+  JSON.parse(loop.listTool().content[0]!.text);
+
+describe("LoopIntegration", () => {
   it("injects the standing-order instruction without creating a task or using a user message", async () => {
     const { loop, context, sendMessage } = setup();
     await loop.handleLoopCommand("check CI", context);
@@ -67,7 +76,29 @@ describe("LoopController", () => {
       expect(instruction).toContain(text);
     for (const text of ["schedule_wakeup", "Clock-time", "weekday"])
       expect(instruction).not.toContain(text);
-    expect(loop.list()).toEqual([]);
+    expect(list(loop)).toEqual([]);
+  });
+
+  it("resolves project prompt files only when the Pi context is trusted", async () => {
+    const directory = mkdtempSync("/tmp/pi-loop-prompt-");
+    const agentDir = join(directory, "agent");
+    try {
+      mkdirSync(join(directory, ".pi"));
+      mkdirSync(agentDir);
+      writeFileSync(join(directory, ".pi", "loop.md"), "Trusted project standing order");
+      writeFileSync(join(agentDir, "loop.md"), "Personal standing order");
+      vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+      const { loop, ctx, context, sendMessage } = setup();
+      ctx.cwd = directory;
+      await loop.handleLoopCommand("", context);
+      expect(sendMessage.mock.lastCall![0].content).toContain("Personal standing order");
+      expect(sendMessage.mock.lastCall![0].content).not.toContain("Trusted project standing order");
+      ctx.isProjectTrusted.mockReturnValue(true);
+      await loop.handleLoopCommand("", context);
+      expect(sendMessage.mock.lastCall![0].content).toContain("Trusted project standing order");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("creates and updates with unchanged confirmations and tool details, and validates arguments", () => {
@@ -122,7 +153,7 @@ describe("LoopController", () => {
       "No session loops. Use /loop [interval] [prompt] to create one.",
       "info",
     );
-    loop.create({ prompt: "check deploy", interval: "5m" });
+    loop.createTool({ prompt: "check deploy", interval: "5m" });
     ctx.ui.notify.mockClear();
     await loop.handleLoopCommand("list", context);
     expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(
@@ -131,18 +162,18 @@ describe("LoopController", () => {
     );
     expect(ctx.ui.notify.mock.calls[0]![0]).toContain("5m");
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(JSON.parse(loop.listTool().content[0]!.text)).toEqual(loop.list());
+    expect(JSON.parse(loop.listTool().content[0]!.text)).toEqual(list(loop));
   });
 
   it("pauses the selected task without removing other tasks", async () => {
     const { loop, ctx, context } = setup();
     ctx.hasUI = true;
-    const { value: task } = loop.create({ prompt: "check deploy", interval: "5m" });
-    loop.create({ prompt: "watch CI", interval: "10m" });
+    const { details: task } = loop.createTool({ prompt: "check deploy", interval: "5m" });
+    loop.createTool({ prompt: "watch CI", interval: "10m" });
     ctx.ui.custom.mockResolvedValueOnce({ action: "stop", id: task.id });
     await loop.showLoops(context);
-    expect(loop.list()).toHaveLength(2);
-    expect(loop.list().find((item) => item.id === task.id)?.stopped).toBe(true);
+    expect(list(loop)).toHaveLength(2);
+    expect(list(loop).find((item) => item.id === task.id)?.stopped).toBe(true);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       "Paused loop. Already dispatched work was not cancelled.",
       "info",
@@ -152,7 +183,7 @@ describe("LoopController", () => {
   it("resumes and removes through the picker with local-only cancellation feedback", async () => {
     const { loop, ctx, context } = setup();
     ctx.hasUI = true;
-    const { value: task } = loop.create({ prompt: "check deploy", interval: "5m" });
+    const { details: task } = loop.createTool({ prompt: "check deploy", interval: "5m" });
     ctx.ui.custom
       .mockResolvedValueOnce({ action: "restart", id: task.id })
       .mockResolvedValueOnce({ action: "remove", id: task.id });
@@ -162,14 +193,14 @@ describe("LoopController", () => {
       "Removed loop. Already dispatched work was not cancelled.",
       "info",
     );
-    expect(loop.list()).toEqual([]);
+    expect(list(loop)).toEqual([]);
   });
 
   it("keeps one compact widget line, suppresses unchanged renders, and shows dispatch lifecycle", () => {
     const { loop, ctx, context, sendMessage, appendEntry } = setup();
     ctx.hasUI = true;
-    loop.create({ prompt: "check deploy", interval: "5m", fireImmediately: true });
-    loop.create({ prompt: "watch CI", interval: "10m" });
+    loop.createTool({ prompt: "check deploy", interval: "5m", fire_immediately: true });
+    loop.createTool({ prompt: "watch CI", interval: "10m" });
     const lines = ctx.ui.setWidget.mock.lastCall![1];
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("[loop] waiting · check deploy · +1");
@@ -189,33 +220,6 @@ describe("LoopController", () => {
     expect(appendEntry).toHaveBeenCalledTimes(writes);
   });
 
-  it.each([false, true])(
-    "checkpoints and renders before resume dispatch, even when saving fails: %s",
-    (failSave) => {
-      const { loop, ctx, entries, appendEntry, sendMessage } = setup();
-      ctx.hasUI = true;
-      const { value: task } = loop.create({ prompt: "watch", interval: "5m" });
-      loop.pause(task.id);
-      const order: string[] = [];
-      appendEntry.mockImplementation((customType, data) => {
-        expect(loop.list()[0]?.stopped).toBe(false);
-        order.push("checkpoint");
-        if (failSave) throw new Error("EISDIR");
-        entries.push({ type: "custom", customType, data });
-      });
-      ctx.ui.setWidget.mockImplementation(() => {
-        order.push("render");
-      });
-      sendMessage.mockImplementation(() => {
-        order.push("dispatch");
-      });
-      const outcome = loop.resume(task.id);
-      expect(order).toEqual(["checkpoint", "render", "dispatch"]);
-      expect(outcome.value).toMatchObject({ id: task.id, stopped: false });
-      expect(Boolean(outcome.warning)).toBe(failSave);
-    },
-  );
-
   it("releases context and timer resources on disposal without writing a shutdown snapshot", () => {
     class OwnedContext {
       cwd = process.cwd();
@@ -226,20 +230,20 @@ describe("LoopController", () => {
     }
     const before = queryObjects(OwnedContext, { format: "count" });
     const appendEntry = vi.fn();
-    const loop = new LoopController({ appendEntry, sendMessage: vi.fn() });
+    const loop = new LoopIntegration({ appendEntry, sendMessage: vi.fn() });
     live.push(loop);
     loop.recover(new OwnedContext() as unknown as ExtensionContext, "startup");
-    loop.create({ prompt: "release me", interval: "5m" });
+    loop.createTool({ prompt: "release me", interval: "5m" });
     // Use a fresh context to exercise the deferred settlement callback as well.
     loop.agentSettled(new OwnedContext() as unknown as ExtensionContext);
     expect(vi.getTimerCount()).toBe(2);
     expect(queryObjects(OwnedContext, { format: "count" })).toBe(before + 1);
     loop.dispose();
     expect(vi.getTimerCount()).toBe(0);
-    expect(loop.list()).toEqual([]);
+    expect(list(loop)).toEqual([]);
     expect(appendEntry).toHaveBeenCalledTimes(1);
     expect(queryObjects(OwnedContext, { format: "count" })).toBe(before);
-    expect(() => loop.create({ prompt: "inactive", interval: "5m" })).toThrow(
+    expect(() => loop.createTool({ prompt: "inactive", interval: "5m" })).toThrow(
       /session is not active/,
     );
     loop.dispose();
@@ -250,7 +254,7 @@ describe("LoopController", () => {
     async (action) => {
       const { loop, ctx, context, appendEntry, sendMessage } = setup();
       ctx.hasUI = true;
-      const { value: task } = loop.create({ prompt: "watch", interval: "5m" });
+      const { details: task } = loop.createTool({ prompt: "watch", interval: "5m" });
       let finish!: (result: LoopPickResult) => void;
       ctx.ui.custom.mockImplementationOnce(
         () =>
@@ -277,16 +281,32 @@ describe("LoopController", () => {
   );
 });
 
-describe("controller recovery and completed outcomes", () => {
-  it("restores full definitions, pause state and original expiry without downtime replay", () => {
+describe("Pi recovery and operation feedback", () => {
+  it("translates Pi lifecycle reasons into definition restoration and checkpoint requirements", () => {
+    const restore = vi.spyOn(LoopManager.prototype, "restore");
+    const { loop, context, entries } = setup();
+    loop.createTool({ prompt: "watch", interval: "5m" });
+    const definitions = (entries[0]!.data as { tasks: unknown[] }).tasks;
+    loop.recover(context, "reload");
+    expect(restore).toHaveBeenLastCalledWith(definitions, { checkpointRequired: true });
+    for (const reason of ["new", "fork"] as const) {
+      loop.recover(context, reason);
+      expect(restore).toHaveBeenLastCalledWith([], { checkpointRequired: false });
+    }
+    loop.recover(context, "resume");
+    expect(restore).toHaveBeenLastCalledWith(definitions, { checkpointRequired: false });
+  });
+  it("restores full definitions, pause state and original expiry without downtime replay", async () => {
     const original = setup();
-    const active = original.loop.create({
+    const active = original.loop.createTool({
       prompt: `standing order ${"x".repeat(100)}`,
       interval: "5m",
-      fireImmediately: true,
-    }).value;
-    const paused = original.loop.create({ prompt: "paused", interval: "10m" }).value;
-    original.loop.pause(paused.id);
+      fire_immediately: true,
+    }).details;
+    const paused = original.loop.createTool({ prompt: "paused", interval: "10m" }).details;
+    original.ctx.hasUI = true;
+    original.ctx.ui.custom.mockResolvedValueOnce({ action: "stop", id: paused.id });
+    await original.loop.showLoops(original.context);
     expect(original.entries[0]).toMatchObject({
       customType: LOOP_STATE_CUSTOM_TYPE,
       data: { version: 1, sessionId: "original", tasks: [{ id: active.id }] },
@@ -295,7 +315,7 @@ describe("controller recovery and completed outcomes", () => {
     expect(original.entries).toHaveLength(3);
     vi.setSystemTime(Date.now() + 3_600_000);
     const reopened = setup("original", original.entries);
-    expect(reopened.loop.list()).toEqual(
+    expect(list(reopened.loop)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: active.id,
@@ -319,11 +339,11 @@ describe("controller recovery and completed outcomes", () => {
 
   it("uses the latest session-wide updates and final empty snapshot", () => {
     const original = setup();
-    const { value: task } = original.loop.create({ prompt: "old", interval: "5m" });
-    original.loop.update({ id: task.id, prompt: "updated", interval: "10m" });
+    const { details: task } = original.loop.createTool({ prompt: "old", interval: "5m" });
+    original.loop.createTool({ id: task.id, prompt: "updated", interval: "10m" });
     const reopened = setup("original", original.entries);
     reopened.loop.recover(reopened.context, "reload");
-    expect(reopened.loop.list()).toMatchObject([
+    expect(list(reopened.loop)).toMatchObject([
       { id: task.id, interval: "10m", prompt_preview: "updated" },
     ]);
     const removed = reopened.loop.deleteTool(task.id);
@@ -331,37 +351,37 @@ describe("controller recovery and completed outcomes", () => {
     expect(removed.content[0]!.text).toContain("deleted_before_dispatch");
     expect(original.entries.at(-1)?.data).toEqual({ version: 1, sessionId: "original", tasks: [] });
     reopened.loop.recover(reopened.context, "resume");
-    expect(reopened.loop.list()).toEqual([]);
+    expect(list(reopened.loop)).toEqual([]);
     expect(original.entries).toHaveLength(3);
   });
 
   it("does not inherit tasks into new or forked sessions, but restores their own tasks", () => {
     const original = setup();
-    original.loop.create({ prompt: "original only", interval: "5m" });
+    original.loop.createTool({ prompt: "original only", interval: "5m" });
     for (const reason of ["new", "fork", "startup"] as const) {
       const fork = setup("fork-id", [...original.entries]);
       fork.loop.recover(fork.context, reason);
-      expect(fork.loop.list()).toEqual([]);
-      const own = fork.loop.create({ prompt: "fork own task", interval: "10m" }).value;
-      expect(setup("fork-id", fork.entries).loop.list()).toMatchObject([
+      expect(list(fork.loop)).toEqual([]);
+      const own = fork.loop.createTool({ prompt: "fork own task", interval: "10m" }).details;
+      expect(list(setup("fork-id", fork.entries).loop)).toMatchObject([
         { id: own.id, prompt_preview: "fork own task" },
       ]);
     }
-    expect(setup("original", original.entries).loop.list()).toMatchObject([
+    expect(list(setup("original", original.entries).loop)).toMatchObject([
       { prompt_preview: "original only" },
     ]);
   });
 
   it("deduplicates definitions, except one explicit checkpoint after reload, including picker actions", async () => {
     const { loop, ctx, context, entries, appendEntry } = setup();
-    const { value: task } = loop.create({ prompt: "watch", interval: "5m" });
-    loop.update({ id: task.id, prompt: "watch", interval: "5m" });
+    const { details: task } = loop.createTool({ prompt: "watch", interval: "5m" });
+    loop.createTool({ id: task.id, prompt: "watch", interval: "5m" });
     expect(appendEntry).toHaveBeenCalledTimes(1);
     loop.recover(context, "reload");
     expect(appendEntry).toHaveBeenCalledTimes(1);
-    loop.update({ id: task.id, prompt: "watch", interval: "5m" });
+    loop.createTool({ id: task.id, prompt: "watch", interval: "5m" });
     expect(appendEntry).toHaveBeenCalledTimes(2);
-    loop.update({ id: task.id, prompt: "watch" });
+    loop.createTool({ id: task.id, prompt: "watch" });
     expect(appendEntry).toHaveBeenCalledTimes(2);
     ctx.hasUI = true;
     loop.recover(context, "reload");
@@ -379,66 +399,42 @@ describe("controller recovery and completed outcomes", () => {
     }
     expect(entries.at(-1)?.data).toEqual({ version: 1, sessionId: "original", tasks: [] });
     loop.recover(context, "resume");
-    expect(loop.list()).toEqual([]);
+    expect(list(loop)).toEqual([]);
   });
 
-  it("keeps failed-save results truthful and retries explicitly without leaking warnings to other outcomes", () => {
-    const { loop, ctx, entries, appendEntry, sendMessage } = setup();
+  it("formats failed-save results with actual IDs and unchanged details, then clears feedback on retry", () => {
+    const { loop, ctx, entries, appendEntry } = setup();
     ctx.hasUI = true;
-    const failAppend = () =>
-      appendEntry.mockImplementationOnce((customType, data) => {
-        entries.push({ type: "custom", customType, data });
-        throw new Error("EISDIR");
-      });
-    failAppend();
-    const created = loop.createTool({ prompt: "watch", interval: "5m", fire_immediately: true });
-    const id = created.details.id;
-    expect(created.content[0]!.text).toContain(id);
+    appendEntry.mockImplementationOnce((customType, data) => {
+      entries.push({ type: "custom", customType, data });
+      throw new Error("EISDIR");
+    });
+    const created = loop.createTool({ prompt: "watch", interval: "5m" });
+    expect(created.content[0]!.text).toContain(created.details.id);
     expect(created.content[0]!.text).toContain(
       "applied in memory but could not be saved for restart",
     );
+    expect(created.details).not.toHaveProperty("warning");
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("could not be saved for restart"),
       "warning",
     );
-    expect(created.details).not.toHaveProperty("warning");
-    expect(loop.pause("deadbeef")).toEqual({ value: "not_found" });
-    expect(loop.remove("deadbeef")).toEqual({ value: "not_found" });
-    expect(() => loop.createTool({ id })).toThrow(/NOTHING_TO_UPDATE/);
-    expect(() => loop.update({ id, prompt: "changed", interval: "invalid" })).toThrow(
-      /INVALID_INTERVAL/,
-    );
-    expect(appendEntry).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(1000);
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const saved = loop.createTool({ id, prompt: "watch" });
+    const saved = loop.createTool({ id: created.details.id, prompt: "watch" });
     expect(saved.content[0]!.text).not.toContain("could not be saved");
     expect(appendEntry).toHaveBeenCalledTimes(2);
-    loop.update({ id, prompt: "watch" });
-    expect(appendEntry).toHaveBeenCalledTimes(2);
-    failAppend();
-    const failed = loop.update({ id, prompt: "changed" });
-    expect(failed.value.id).toBe(id);
-    expect(failed.warning).toContain("could not be saved");
-    expect(loop.update({ id, prompt: "watch" }).warning).toBeUndefined();
-    expect(failed.warning).toContain("could not be saved");
-    expect(appendEntry).toHaveBeenCalledTimes(4);
-    failAppend();
-    const removed = loop.deleteTool(id);
-    expect(removed.content[0]!.text).toContain(id);
-    expect(removed.content[0]!.text).toContain("could not be saved");
+    appendEntry.mockImplementationOnce(() => {
+      throw new Error("EISDIR");
+    });
+    const removed = loop.deleteTool(created.details.id);
     expect(removed.details).toEqual({});
-    expect(loop.list()).toEqual([]);
-    expect(() => loop.deleteTool(id)).toThrow(/^TASK_NOT_FOUND:/);
-    const replacement = loop.create({ prompt: "replacement", interval: "5m" }).value;
-    loop.remove(replacement.id);
-    expect(entries.at(-1)?.data).toEqual({ version: 1, sessionId: "original", tasks: [] });
+    expect(removed.content[0]!.text).toContain("could not be saved");
+    expect(() => loop.deleteTool(created.details.id)).toThrow(/^TASK_NOT_FOUND:/);
   });
 
   it("presents the selected operation warning without making it sticky", async () => {
     const { loop, ctx, context, appendEntry } = setup();
     ctx.hasUI = true;
-    const { value: task } = loop.create({ prompt: "watch", interval: "5m" });
+    const { details: task } = loop.createTool({ prompt: "watch", interval: "5m" });
     appendEntry.mockImplementationOnce(() => {
       throw new Error("EISDIR");
     });
@@ -457,13 +453,13 @@ describe("controller recovery and completed outcomes", () => {
 
   it("ignores unsupported or malformed owned state without resurrecting earlier tasks", () => {
     const { loop, context, entries } = setup();
-    loop.create({ prompt: "old", interval: "5m" });
+    loop.createTool({ prompt: "old", interval: "5m" });
     entries.push({
       type: "custom",
       customType: LOOP_STATE_CUSTOM_TYPE,
       data: { version: 2, sessionId: "original", tasks: [] },
     });
     loop.recover(context, "startup");
-    expect(loop.list()).toEqual([]);
+    expect(list(loop)).toEqual([]);
   });
 });
