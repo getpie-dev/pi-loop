@@ -15,9 +15,9 @@ import {
 } from "./format.js";
 import { LoopError } from "./interval.js";
 import { pickLoopToManage } from "./list-ui.js";
-import { LoopManager } from "./manager.js";
 import { loopScheduleInstruction, resolveMaintenancePrompt } from "./prompt.js";
 import type { CreateResult, MutationOutcome, UpdateInput } from "./scheduler.js";
+import { Scheduler } from "./scheduler.js";
 import {
   LOOP_CUSTOM_TYPE,
   LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE,
@@ -34,10 +34,10 @@ interface CreateToolInput {
 export class LoopIntegration {
   private ctx: ExtensionContext | null = null;
   private lastWidget = "";
-  private readonly manager: LoopManager;
+  private readonly scheduler: Scheduler;
 
   constructor(private readonly pi: Pick<ExtensionAPI, "sendMessage" | "appendEntry">) {
-    this.manager = new LoopManager({
+    this.scheduler = new Scheduler({
       clock: { now: () => Date.now() },
       dispatch: {
         isIdle: () => this.ctx?.isIdle() ?? false,
@@ -88,33 +88,33 @@ export class LoopIntegration {
       }
     }
     // Reload may restore entries retained in memory after a failed append.
-    this.manager.restore(definitions, { checkpointRequired: reason === "reload" });
+    this.scheduler.restore(definitions, { checkpointRequired: reason === "reload" });
   }
 
   agentStarted(): void {
-    this.manager.markStarted();
+    this.scheduler.markStarted();
   }
 
   agentSettled(ctx: ExtensionContext): void {
     if (!this.ctx) return;
     this.ctx = ctx;
-    this.manager.settle();
+    this.scheduler.settle();
   }
 
   dispose(): void {
     const ctx = this.ctx;
     this.ctx = null;
     this.lastWidget = "";
-    this.manager.dispose();
+    this.scheduler.dispose();
     if (ctx?.hasUI) ctx.ui.setWidget(WIDGET_ID, undefined);
   }
 
   createTool(params: CreateToolInput) {
     const outcome = hasSchedulerId(params.id)
-      ? this.manager.update(
+      ? this.scheduler.update(
           toUpdateInput({ id: params.id, prompt: params.prompt, interval: params.interval }),
         )
-      : this.manager.create({
+      : this.scheduler.create({
           prompt: requireCreateField(params.prompt, "prompt"),
           interval: requireCreateField(params.interval, "interval"),
           fireImmediately: params.fire_immediately === true,
@@ -123,11 +123,11 @@ export class LoopIntegration {
   }
 
   listTool() {
-    return textResult(JSON.stringify(this.manager.list()));
+    return textResult(JSON.stringify(this.scheduler.list()));
   }
 
   deleteTool(id: string) {
-    const outcome = this.manager.remove(id);
+    const outcome = this.scheduler.remove(id);
     if (outcome.value === "not_found") throw new LoopError("TASK_NOT_FOUND", `id ${id} not found`);
     const suffix = "Already dispatched work, if any, was not cancelled.";
     return this.mutationResult(
@@ -165,7 +165,7 @@ export class LoopIntegration {
     if (!this.ctx) return;
     this.ctx = ctx;
     while (true) {
-      const items = this.manager.list();
+      const items = this.scheduler.list();
       const now = Date.now();
       if (items.length === 0) {
         ctx.ui.notify("No session loops. Use /loop [interval] [prompt] to create one.", "info");
@@ -187,7 +187,7 @@ export class LoopIntegration {
         this.notifyMutation(
           ctx,
           "Paused loop. Already dispatched work was not cancelled.",
-          this.manager.pause(result.id),
+          this.scheduler.pause(result.id),
         );
         continue;
       }
@@ -196,7 +196,7 @@ export class LoopIntegration {
           this.notifyMutation(
             ctx,
             "Restarted loop; queued until idle.",
-            this.manager.resume(result.id),
+            this.scheduler.resume(result.id),
           );
         } catch (error) {
           if (!(error instanceof LoopError)) throw error;
@@ -208,7 +208,7 @@ export class LoopIntegration {
         this.notifyMutation(
           ctx,
           "Removed loop. Already dispatched work was not cancelled.",
-          this.manager.remove(result.id),
+          this.scheduler.remove(result.id),
         );
         continue;
       }
@@ -219,7 +219,7 @@ export class LoopIntegration {
   private refreshWidget(): void {
     const ctx = this.ctx;
     if (!ctx?.hasUI) return;
-    const lines = formatWidgetLines(this.manager.list(), Date.now());
+    const lines = formatWidgetLines(this.scheduler.list(), Date.now());
     const key = lines.join("\n");
     if (key === this.lastWidget) return;
     this.lastWidget = key;

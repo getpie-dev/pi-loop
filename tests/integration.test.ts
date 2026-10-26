@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WIDGET_ID } from "../extensions/format.ts";
 import { LoopIntegration } from "../extensions/integration.ts";
 import type { LoopPickResult } from "../extensions/list-ui.ts";
-import { LoopManager } from "../extensions/manager.ts";
 import type { SchedulerListItem } from "../extensions/scheduler.ts";
+import { Scheduler } from "../extensions/scheduler.ts";
 import {
   LOOP_CUSTOM_TYPE,
   LOOP_SCHEDULE_INSTRUCTION_CUSTOM_TYPE,
@@ -283,7 +283,7 @@ describe("LoopIntegration", () => {
 
 describe("Pi recovery and operation feedback", () => {
   it("translates Pi lifecycle reasons into definition restoration and checkpoint requirements", () => {
-    const restore = vi.spyOn(LoopManager.prototype, "restore");
+    const restore = vi.spyOn(Scheduler.prototype, "restore");
     const { loop, context, entries } = setup();
     loop.createTool({ prompt: "watch", interval: "5m" });
     const definitions = (entries[0]!.data as { tasks: unknown[] }).tasks;
