@@ -2,30 +2,18 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    tags: ['v*']
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-    steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
-        with:
-          release-type: node
-
   publish:
-    needs: release
-    if: ${{ needs.release.outputs.release_created }}
+    # npm trusted publishing does not support third-party runners.
     runs-on: ubuntu-latest
     environment: publish
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -35,8 +23,22 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      - name: Verify tag matches package version
+        run: test "$GITHUB_REF_NAME" = "v$(node -p "require('./package.json').version")"
+
+      - run: npm install --global npm@11
+
       - run: npm ci
 
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run lint
+
       - run: npm publish --provenance --access public
+
+      - name: Create GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}

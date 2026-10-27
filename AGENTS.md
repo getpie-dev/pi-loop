@@ -50,6 +50,27 @@ The host-independent `Scheduler` accepts only domain clock/dispatch, definition-
 
 ---
 
+## Documentation
+
+Keep `README.md` focused on installation, usage, and user-visible behavior. Repository architecture, CI, testing, and release procedures belong in `AGENTS.md`, not the README.
+
+## CI and releases
+
+CI runs on pushes and pull requests to `main`, using Blacksmith's 2 vCPU Ubuntu runners. The Blacksmith GitHub App must have access to this repository.
+
+Release runs only when a `v*` git tag is pushed, never on ordinary branch pushes. The tag must exactly match `v` plus the version in `package.json`. Update `package.json` and `package-lock.json` to a new, unpublished version, commit the change, then tag that commit and push the version tag explicitly. Do not create or push a release tag unless the user requests a release.
+
+Publishing uses npm OIDC, not an `NPM_TOKEN`. The publish job stays on a GitHub-hosted runner because npm trusted publishing does not support third-party runners. It validates the tag, runs type checking, tests, and lint, publishes to npm, then creates the GitHub release.
+
+One-time setup:
+
+1. In the npm package's **Settings → Trusted publishing**, add a GitHub Actions publisher with organization `getpie-dev`, repository `pi-loop`, workflow filename `release.yml`, and environment `publish`. Allow direct `npm publish`. A new publisher must complete its first successful publish within two days or be recreated.
+2. Create the repository environment `publish` and restrict deployment tags to `v*`. Add a required reviewer if releases should need an extra approval.
+
+If publishing fails, fix the cause and rerun the failed job for the same tag. If npm publication already succeeded, do not republish that version; complete the GitHub release separately.
+
+---
+
 ## Development commands
 
 ```bash
