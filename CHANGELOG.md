@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.0.6 (2026-10-28)
+
+### Fixed
+
+- Keep the loop summary on one screen row by truncating long prompts, including Chinese and emoji. Show hours and remaining minutes instead of rounding up to whole hours or days.
+
+## 0.0.5 (2026-10-27)
+
+### Changed
+
+- Release automation only; no runtime changes.
+
+## 0.0.4 (2026-10-26)
+
 ### Added
 
 - Restore task definitions and pause state from the original Pi session, preserving IDs and absolute expiry without replaying downtime. New/forked sessions and `--no-session` do not inherit tasks.
@@ -14,7 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Keep the loop summary on one screen row by truncating long prompts, including Chinese and emoji. Show hours and remaining minutes instead of rounding up to whole hours or days.
 - Skip duplicate recovery snapshots for unchanged task definitions, including repeated pause/restart requests. After reload, checkpoint once on the next explicit management operation because restored in-memory entries may not be saved.
 - Report session-save failures as applied-in-memory changes with a warning, preserving task IDs and allowing later explicit operations to save again.
 - Validate all update fields before changing a task.
