@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { queryObjects } from "node:v8";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WIDGET_ID } from "../extensions/format.ts";
 import { LoopIntegration } from "../extensions/integration.ts";
@@ -201,9 +202,9 @@ describe("LoopIntegration", () => {
     ctx.hasUI = true;
     loop.createTool({ prompt: "check deploy", interval: "5m", fire_immediately: true });
     loop.createTool({ prompt: "watch CI", interval: "10m" });
-    const lines = ctx.ui.setWidget.mock.lastCall![1];
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("[loop] waiting · check deploy · +1");
+    const renderWidget = () => ctx.ui.setWidget.mock.lastCall![1]().render(80);
+    expect(renderWidget()).toHaveLength(1);
+    expect(renderWidget()[0]).toContain("[loop] waiting · check deploy · +1");
     const writes = appendEntry.mock.calls.length;
     vi.advanceTimersByTime(1000);
     expect(sendMessage.mock.calls[0]).toMatchObject([
@@ -211,13 +212,29 @@ describe("LoopIntegration", () => {
       { triggerTurn: true },
     ]);
     loop.agentStarted();
-    expect(ctx.ui.setWidget.mock.lastCall![1][0]).toContain("running");
+    expect(renderWidget()[0]).toContain("running");
     loop.agentSettled(context);
-    expect(ctx.ui.setWidget.mock.lastCall![1][0]).toContain("next 5m");
+    expect(renderWidget()[0]).toContain("next 5m");
     const renders = ctx.ui.setWidget.mock.calls.length;
     vi.advanceTimersByTime(1000);
     expect(ctx.ui.setWidget).toHaveBeenCalledTimes(renders);
     expect(appendEntry).toHaveBeenCalledTimes(writes);
+  });
+
+  it("keeps long Chinese and emoji previews on one visible row when resized", () => {
+    const { loop, ctx } = setup();
+    ctx.hasUI = true;
+    loop.createTool({ prompt: "检查仓库状态并处理失败任务 🚀 ".repeat(5), interval: "3h" });
+    const widget = ctx.ui.setWidget.mock.lastCall![1]();
+    for (const width of [1, 2, 20, 40, 80, 240]) {
+      const lines = widget.render(width);
+      expect(lines).toHaveLength(1);
+      expect(visibleWidth(lines[0])).toBeLessThanOrEqual(width);
+      expect(lines[0]).not.toMatch(/[\r\n]/);
+    }
+    expect(widget.render(80)[0]).toContain("...");
+    expect(widget.render(240)[0]).toContain("next 3h 0m");
+    expect(widget.render(240)[0]).toContain(list(loop)[0]!.prompt_preview);
   });
 
   it("releases context and timer resources on disposal without writing a shutdown snapshot", () => {

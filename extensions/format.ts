@@ -15,9 +15,7 @@ export function formatDue(nextFireAt: string | null, now: number): string {
   if (sec < 60) return `${sec}s`;
   const min = Math.ceil(sec / 60);
   if (min < 60) return `${min}m`;
-  const hr = Math.ceil(min / 60);
-  if (hr < 48) return `${hr}h`;
-  return `${Math.ceil(hr / 24)}d`;
+  return `${Math.floor(min / 60)}h ${min % 60}m`;
 }
 
 export function formatLoopState(item: SchedulerListItem, now: number): string {

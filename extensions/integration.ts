@@ -6,6 +6,7 @@ import {
   getAgentDir,
   type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
+import { TruncatedText } from "@earendil-works/pi-tui";
 import {
   formatLoopLine,
   formatLoopList,
@@ -223,7 +224,7 @@ export class LoopIntegration {
     const key = lines.join("\n");
     if (key === this.lastWidget) return;
     this.lastWidget = key;
-    ctx.ui.setWidget(WIDGET_ID, lines.length > 0 ? lines : undefined);
+    ctx.ui.setWidget(WIDGET_ID, lines.length > 0 ? () => new TruncatedText(` ${key}`) : undefined);
   }
 
   private notifyMutation(

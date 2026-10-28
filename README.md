@@ -38,7 +38,7 @@ pi -ne -e /Users/dinq/Code/oxwen11/pi-loop --no-session
 
 `/loop` asks the model to call `scheduler_create`. It does not create the loop itself.
 
-In TUI, active loops stay above the input as `[loop] next 12s · prompt`. `/loops` or `/loop list` opens the full list: `d` stop, `r` restart, `x` remove.
+In TUI, the loop summary stays on one screen row above the input; long prompts are truncated. Countdowns show hours and minutes, e.g. `[loop] next 2h 35m · prompt`, minutes below an hour, and seconds below a minute. `/loops` or `/loop list` opens the full list: `d` stop, `r` restart, `x` remove.
 
 | Input | What the model should do |
 |---|---|
