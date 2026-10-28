@@ -67,6 +67,23 @@ describe("host-independent Scheduler", () => {
     expect(saved).toHaveLength(5);
   });
 
+  it("keeps checkpoint deduplication stable after overdue ticks and restoration", () => {
+    const { scheduler, saved, dispatch, saveDefinitions } = setup();
+    dispatch.isIdle.mockReturnValue(false);
+    const start = Date.now();
+    const task = scheduler.create({ prompt: "watch", interval: "5m" }).value;
+    vi.setSystemTime(start + 18 * 60_000 + 30_000);
+    vi.advanceTimersByTime(1000);
+    const next = new Date(start + 20 * 60_000).toISOString();
+    expect(scheduler.list()[0]?.next_fire_at).toBe(next);
+    scheduler.update({ id: task.id, prompt: "watch" });
+    expect(saveDefinitions).toHaveBeenCalledTimes(1);
+    scheduler.restore(saved[0]);
+    expect(scheduler.list()[0]).toMatchObject({ next_fire_at: next, pending: false });
+    scheduler.update({ id: task.id, prompt: "watch" });
+    expect(saveDefinitions).toHaveBeenCalledTimes(1);
+  });
+
   it("returns failed-save outcomes with actual values, and does not lend warnings to other operations", () => {
     const { scheduler, saveDefinitions } = setup();
     saveDefinitions.mockImplementationOnce(() => {

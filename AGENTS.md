@@ -28,7 +28,7 @@ The host-independent `Scheduler` accepts only domain clock/dispatch, definition-
 - **No build step** — pi loads `.ts` via jiti. Do not add a compile step.
 - **Peer dependencies** — `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `@earendil-works/pi-agent-core`, `typebox` are provided by pi at runtime. Keep `"*"` ranges. Do not bundle them.
 - **No Xiaohu/pie host deps** — this package must run in stock Pi CLI.
-- **Session-owned persistence** — save definitions and pause state using Pi >= 1.4.0 public session records. Restore only the same session; no separate database, cross-session inheritance, downtime replay, or background execution. `--no-session` stays ephemeral.
+- **Session-owned persistence** — save definitions and pause state using Pi >= 1.4.0 public session records. Restore only the same session; no separate database, cross-session inheritance, downtime replay, or background execution. `--no-session` stays ephemeral. Definitions include a stable `anchorAt` interval deadline, not the ticking `nextFireAt`. Restoration retains future deadlines and skips elapsed cadence slots; legacy definitions infer the anchor from creation time and interval.
 - **2-space indentation** — biome.
 
 ### Behaviour that must not regress

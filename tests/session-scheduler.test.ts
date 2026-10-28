@@ -330,9 +330,95 @@ describe("session scheduler", () => {
         .flat()
         .every(
           (task) =>
-            Object.keys(task).sort().join() === "createdAt,expiresAt,id,interval,prompt,stopped",
+            Object.keys(task).sort().join() ===
+            "anchorAt,createdAt,expiresAt,id,interval,prompt,stopped",
         ),
     ).toBe(true);
+  });
+
+  it("preserves a future deadline across repeated restoration", () => {
+    const { scheduler, clock, snapshots } = setup();
+    const created = scheduler.create({ prompt: "watch", interval: "3h" }).value;
+    const saved = snapshots[0]!;
+    for (const elapsed of [25 * 60_000, 10 * 60_000]) {
+      clock.advance(elapsed);
+      scheduler.startSession(saved);
+      expect(scheduler.list()[0]?.next_fire_at).toBe(created.next_fire_at);
+      expect(scheduler.definitions()).toEqual(saved);
+    }
+    expect(snapshots).toHaveLength(1);
+  });
+
+  it("keeps cadence through late ticks and reload without persisting ticks or replaying misses", () => {
+    const { scheduler, clock, snapshots, sent } = setup(false);
+    const start = clock.now();
+    scheduler.create({ prompt: "watch", interval: "5m" });
+    const saved = snapshots[0]!;
+    clock.advance(5 * 60_000 + 1700);
+    scheduler.tick();
+    expect(scheduler.list()[0]?.next_fire_at).toBe(new Date(start + 10 * 60_000).toISOString());
+    clock.advance(13 * 60_000);
+    scheduler.tick();
+    const next = new Date(start + 20 * 60_000).toISOString();
+    expect(scheduler.list()[0]).toMatchObject({ next_fire_at: next, pending: true });
+    expect(scheduler.definitions()).toEqual(saved);
+    expect(snapshots).toHaveLength(1);
+    scheduler.startSession(saved);
+    expect(scheduler.list()[0]).toMatchObject({
+      next_fire_at: next,
+      pending: false,
+      running: false,
+    });
+    scheduler.tick();
+    expect(sent).toHaveLength(0);
+  });
+
+  it("preserves interval-update and restart deadlines across restoration", () => {
+    const { scheduler, clock, snapshots } = setup(false);
+    const created = scheduler.create({ prompt: "watch", interval: "5m" }).value;
+    clock.advance(2 * 60_000);
+    scheduler.update({ id: created.id, interval: "10m" });
+    let saved = snapshots.at(-1)!;
+    clock.advance(60_000);
+    scheduler.startSession(saved);
+    expect(scheduler.list()[0]?.next_fire_at).toBe(created.next_fire_at);
+    clock.advance(3 * 60_000);
+    scheduler.tick();
+    const next = new Date(Date.parse(created.next_fire_at!) + 10 * 60_000).toISOString();
+    scheduler.startSession(saved);
+    expect(scheduler.list()[0]?.next_fire_at).toBe(next);
+    const restarted = scheduler.restart(created.id).value;
+    saved = snapshots.at(-1)!;
+    clock.advance(2 * 60_000);
+    scheduler.startSession(saved);
+    expect(scheduler.list()[0]).toMatchObject({
+      next_fire_at: restarted.next_fire_at,
+      pending: false,
+      expires_at: created.expires_at,
+    });
+  });
+
+  it("restores legacy definitions from their creation cadence", () => {
+    const { scheduler, clock, snapshots } = setup();
+    const created = scheduler.create({ prompt: "watch", interval: "3h" }).value;
+    const legacy = { ...snapshots[0]![0]! };
+    delete legacy.anchorAt;
+    clock.advance(25 * 60_000);
+    scheduler.startSession([legacy]);
+    expect(scheduler.list()[0]?.next_fire_at).toBe(created.next_fire_at);
+  });
+
+  it("retains definitions with no interval fire before expiry", () => {
+    const { scheduler, clock, snapshots } = setup();
+    const created = scheduler.create({ prompt: "watch", interval: "7d" }).value;
+    expect(created.next_fire_at).toBeNull();
+    clock.advance(60_000);
+    const saved = { ...snapshots[0]![0]! };
+    for (const legacy of [false, true]) {
+      if (legacy) delete saved.anchorAt;
+      scheduler.startSession([saved]);
+      expect(scheduler.list()[0]).toMatchObject({ id: created.id, next_fire_at: null });
+    }
   });
 
   it("persists only successful management mutations, including the final empty state", () => {
@@ -367,6 +453,10 @@ describe("session scheduler", () => {
       { ...definition, prompt: "" },
       { ...definition, interval: "bad" },
       { ...definition, stopped: "yes" },
+      { ...definition, anchorAt: "tomorrow" },
+      { ...definition, anchorAt: Number.NaN },
+      { ...definition, anchorAt: -1 },
+      { ...definition, anchorAt: definition.expiresAt },
     ]);
     expect(scheduler.list()).toEqual([]);
     clock.advance(TTL_MS);

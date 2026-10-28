@@ -58,7 +58,9 @@ In TUI, the loop summary stays on one screen row above the input; long prompts a
 
 Resume the original Pi session to recover task IDs, full prompts, cadence, pause state, and the original absolute expiry. Restoration uses the latest session-wide state, so conversation tree navigation does not undo task management. A fork does not inherit tasks, but tasks created inside it can be restored there.
 
-After restoration, the next interval fire is planned from the current time. Downtime is not replayed, expired tasks are skipped, and expiry is never extended. Paused tasks stay paused; restart queues a fire until idle and resets the next interval deadline. Interval updates keep the existing next deadline.
+Reloading or reopening the session keeps the original next trigger time instead of restarting the countdown. If that time has passed, elapsed interval slots are skipped and the next future slot is used, without replaying downtime. Expired tasks are skipped and expiry is never extended. Paused tasks stay paused; restart queues a fire until idle and resets the next interval deadline. Interval updates keep the existing next deadline.
+
+Older saved loops fall back to their creation time and current interval. Their earlier restart or interval-change timing cannot be recovered exactly on the first upgrade.
 
 Pi owns storage; there is no separate task database. A session must contain a conversation message for Pi to flush a new session file. No tasks run while Pi is closed. Pending/running work and recent dispatch facts are never restored.
 

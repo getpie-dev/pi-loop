@@ -29,6 +29,8 @@ export interface LoopTask {
   createdAt: number;
   expiresAt: number;
   nextFireAt: number | null;
+  // Stable cadence reference; unlike nextFireAt, it is not changed by ticks.
+  anchorAt?: number | null;
   pendingSince: number | null;
   stopped: boolean;
   lastDispatch?: DispatchFact;
@@ -36,7 +38,7 @@ export interface LoopTask {
 
 export type TaskDefinition = Pick<
   LoopTask,
-  "id" | "prompt" | "interval" | "createdAt" | "expiresAt" | "stopped"
+  "id" | "prompt" | "interval" | "createdAt" | "expiresAt" | "stopped" | "anchorAt"
 >;
 
 export interface DispatchFact {
@@ -175,6 +177,8 @@ export class SessionLoopScheduler {
     const now = this.host.clock.now();
     const id = this.allocId();
     const fireImmediately = input.fireImmediately === true;
+    const next = now + parsed.ms;
+    const nextFireAt = next < now + TTL_MS ? next : null;
     const task: LoopTask = {
       id,
       prompt: input.prompt,
@@ -182,7 +186,8 @@ export class SessionLoopScheduler {
       intervalMs: parsed.ms,
       createdAt: now,
       expiresAt: now + TTL_MS,
-      nextFireAt: now + parsed.ms < now + TTL_MS ? now + parsed.ms : null,
+      nextFireAt,
+      anchorAt: nextFireAt,
       pendingSince: fireImmediately ? now : null,
       stopped: false,
     };
@@ -199,6 +204,7 @@ export class SessionLoopScheduler {
     const parsed = input.interval != null ? parseInterval(input.interval) : undefined;
     if (input.prompt != null) task.prompt = input.prompt;
     if (parsed) {
+      if (parsed.ms !== task.intervalMs) task.anchorAt = task.nextFireAt;
       task.interval = parsed.compact;
       task.intervalMs = parsed.ms;
     }
@@ -243,6 +249,7 @@ export class SessionLoopScheduler {
     task.pendingSince = now;
     const next = now + task.intervalMs;
     task.nextFireAt = next >= task.expiresAt ? null : next;
+    task.anchorAt = task.nextFireAt;
     const warning = this.mutated();
     this.dispatchPending();
     return { value: this.toCreateResult(task, { updated: true, raised: false }), warning };
@@ -273,8 +280,7 @@ export class SessionLoopScheduler {
       )
       .sort(compareDue);
     for (const task of due) {
-      const next = now + task.intervalMs;
-      task.nextFireAt = next >= task.expiresAt ? null : next;
+      task.nextFireAt = nextFireAfter(task.nextFireAt, task.intervalMs, now, task.expiresAt);
       if (task.pendingSince == null) task.pendingSince = now;
     }
     for (const task of [...this.tasks.values()]) {
@@ -352,13 +358,14 @@ export class SessionLoopScheduler {
 
   definitions(): TaskDefinition[] {
     return [...this.tasks.values()].map(
-      ({ id, prompt, interval, createdAt, expiresAt, stopped }) => ({
+      ({ id, prompt, interval, createdAt, expiresAt, stopped, anchorAt }) => ({
         id,
         prompt,
         interval,
         createdAt,
         expiresAt,
         stopped,
+        anchorAt,
       }),
     );
   }
@@ -378,13 +385,19 @@ export class SessionLoopScheduler {
       task.expiresAt <= task.createdAt ||
       task.expiresAt - task.createdAt > TTL_MS ||
       task.expiresAt <= now ||
-      task.expiresAt > 8.64e15
+      task.expiresAt > 8.64e15 ||
+      (task.anchorAt != null &&
+        (!Number.isSafeInteger(task.anchorAt) ||
+          task.anchorAt < 0 ||
+          task.anchorAt >= task.expiresAt))
     )
       return null;
     try {
       this.assertPrompt(task.prompt);
       const parsed = parseInterval(task.interval);
-      const next = now + parsed.ms;
+      const first = task.createdAt + parsed.ms;
+      const anchorAt =
+        task.anchorAt === undefined ? (first < task.expiresAt ? first : null) : task.anchorAt;
       return {
         id: task.id,
         prompt: task.prompt,
@@ -394,7 +407,8 @@ export class SessionLoopScheduler {
         stopped: task.stopped,
         intervalMs: parsed.ms,
         pendingSince: null,
-        nextFireAt: next < task.expiresAt ? next : null,
+        anchorAt,
+        nextFireAt: nextFireAfter(anchorAt, parsed.ms, now, task.expiresAt),
       };
     } catch {
       return null;
@@ -498,6 +512,20 @@ export class SessionLoopScheduler {
       ...(task.lastDispatch ? { last_dispatch: task.lastDispatch } : {}),
     };
   }
+}
+
+function nextFireAfter(
+  anchorAt: number | null,
+  intervalMs: number,
+  now: number,
+  expiresAt: number,
+): number | null {
+  if (anchorAt == null) return null;
+  const next =
+    anchorAt > now
+      ? anchorAt
+      : anchorAt + (Math.floor((now - anchorAt) / intervalMs) + 1) * intervalMs;
+  return next < expiresAt ? next : null;
 }
 
 function compareDue(a: LoopTask, b: LoopTask): number {
