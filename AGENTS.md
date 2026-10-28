@@ -58,7 +58,13 @@ Keep `README.md` focused on installation, usage, and user-visible behavior. Repo
 
 CI runs on pushes and pull requests to `main`, using Blacksmith's 2 vCPU Ubuntu runners. The Blacksmith GitHub App must have access to this repository.
 
-Release runs only when a `v*` git tag is pushed, never on ordinary branch pushes. The tag must exactly match `v` plus the version in `package.json`. Update `package.json` and `package-lock.json` to a new, unpublished version, commit the change, then tag that commit and push the version tag explicitly. Do not create or push a release tag unless the user requests a release.
+Release runs only when a `v*` git tag is pushed, never on ordinary branch pushes. The tag must exactly match `v` plus the version in `package.json`. Use `bumpp` to update `package.json` and `package-lock.json` and create the release commit/tag; do not bump versions by hand. After explicit release approval, run from a clean, up-to-date `main`:
+
+```bash
+npx --yes bumpp@12.3.0 --release patch --yes --no-push --commit "chore: release {tag}" --tag "v{version}"
+```
+
+`--no-push` keeps the commit and tag local. Push the release commit to `main`, wait for CI to pass, then push only the new version tag. Do not create or push a release tag unless the user requests a release.
 
 Publishing uses npm OIDC, not an `NPM_TOKEN`. The publish job stays on a GitHub-hosted runner because npm trusted publishing does not support third-party runners. It validates the tag, runs type checking, tests, and lint, publishes to npm, then creates the GitHub release.
 
