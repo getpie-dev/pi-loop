@@ -354,6 +354,22 @@ describe("Pi recovery and operation feedback", () => {
     expect(reopened.entries).toHaveLength(3);
   });
 
+  it("keeps the deadline and remaining countdown through reload of the same session", () => {
+    const { loop, ctx, context, entries, sendMessage } = setup();
+    ctx.hasUI = true;
+    const task = loop.createTool({ prompt: "watch", interval: "3h" }).details;
+    vi.setSystemTime(Date.now() + 25 * 60_000);
+    loop.recover(context, "reload");
+    expect(list(loop)[0]).toMatchObject({
+      id: task.id,
+      next_fire_at: task.next_fire_at,
+      expires_at: task.expires_at,
+    });
+    expect(ctx.ui.setWidget.mock.lastCall![1]().render(80)[0]).toContain("next 2h 35m");
+    expect(entries).toHaveLength(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses the latest session-wide updates and final empty snapshot", () => {
     const original = setup();
     const { details: task } = original.loop.createTool({ prompt: "old", interval: "5m" });

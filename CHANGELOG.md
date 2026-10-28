@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Preserve loop countdowns across reload and session resume. Keep the original cadence, skip elapsed slots without replay, and retain pause state and absolute expiry. Older saved loops infer cadence from their creation time and current interval.
+
 ## 0.0.6 (2026-10-28)
 
 ### Fixed

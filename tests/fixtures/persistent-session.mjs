@@ -118,7 +118,17 @@ try {
       interval: "5m",
     });
     assert.equal(snapshots().length, beforeReload);
-    await session.reload();
+    const sessionId = sessionManager.getSessionId();
+    const realNow = Date.now;
+    // Simulate elapsed time so resetting the deadline cannot pass unnoticed.
+    Date.now = () => realNow() + 90_000;
+    try {
+      await session.reload();
+      assert.equal(sessionManager.getSessionId(), sessionId);
+      assert.equal((await list())[0].next_fire_at, details.next_fire_at);
+    } finally {
+      Date.now = realNow;
+    }
     assert.equal(snapshots().length, beforeReload);
     // Reload can restore an unsaved in-memory entry, so one explicit checkpoint is required.
     await call("scheduler_create", {
@@ -140,7 +150,7 @@ try {
     assert.equal(restored.expires_at, new Date(stored.expiresAt).toISOString());
     assert.equal(restored.pending, false);
     assert.equal(restored.running, false);
-    assert(Date.parse(restored.next_fire_at) >= Date.now() + 290_000);
+    assert.equal(restored.next_fire_at, new Date(stored.anchorAt).toISOString());
     const count = snapshots().length;
     await new Promise((resolve) => setTimeout(resolve, 1100));
     assert.equal(snapshots().length, count);
