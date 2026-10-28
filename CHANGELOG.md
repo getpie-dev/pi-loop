@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep the loop summary on one screen row by truncating long prompts, including Chinese and emoji. Show hours and remaining minutes instead of rounding up to whole hours or days.
 - Skip duplicate recovery snapshots for unchanged task definitions, including repeated pause/restart requests. After reload, checkpoint once on the next explicit management operation because restored in-memory entries may not be saved.
 - Report session-save failures as applied-in-memory changes with a warning, preserving task IDs and allowing later explicit operations to save again.
 - Validate all update fields before changing a task.

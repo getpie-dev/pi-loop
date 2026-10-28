@@ -52,7 +52,19 @@ describe("format", () => {
     expect(formatDue(null, now)).toBe("done");
   });
 
-  it("renders the widget as a single line", () => {
+  it.each([
+    [60_000, "1m"],
+    [60_001, "2m"],
+    [59 * 60_000, "59m"],
+    [60 * 60_000, "1h 0m"],
+    [60 * 60_000 + 1, "1h 1m"],
+    [(2 * 60 + 35) * 60_000, "2h 35m"],
+    [(48 * 60 + 7) * 60_000, "48h 7m"],
+  ])("formats %i ms remaining as %s", (remaining, expected) => {
+    expect(formatDue(new Date(now + remaining).toISOString(), now)).toBe(expected);
+  });
+
+  it("formats one widget summary", () => {
     const items = [
       item({ id: "a", running: true }),
       item({ id: "b", pending: true }),
